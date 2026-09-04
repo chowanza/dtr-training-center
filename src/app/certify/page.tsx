@@ -1,14 +1,17 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
+import { getCurrentUser } from "@/lib/session";
 import { StatusPill } from "@/components/StatusPill";
 import { PageHead } from "@/components/PageHead";
 
 export default async function CertifyIndexPage() {
+  const viewer = await getCurrentUser();
+  if (!(viewer.isAdmin || viewer.isManager)) redirect("/");
   const db = getDb();
-  const csrRole = db.roles.find((r) => r.name === "CSR")!;
-  const csrUsers = db.users.filter((u) => u.roleId === csrRole.id);
+  const users = db.users.filter((u) => u.employmentStatus === "active");
 
-  const rows = csrUsers.flatMap((user) =>
+  const rows = users.flatMap((user) =>
     db.certifications
       .filter((c) => c.userId === user.id && c.status !== "not_started")
       .map((c) => ({ user, cert: c, mod: db.modules.find((m) => m.id === c.moduleId)! }))

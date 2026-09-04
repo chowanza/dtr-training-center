@@ -2,10 +2,12 @@
 
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { getDb, newId, persist } from "./db";
 import { getCurrentUser, setCurrentUserCookie } from "./session";
 import type { CertStatus } from "./constants";
 import type { RubricKey } from "./constants";
+import { SOP_SECTIONS } from "./constants";
 import { moduleCompleteness } from "./derive";
 
 function db() {
@@ -34,7 +36,14 @@ export async function switchUser(formData: FormData) {
 
 // ---------------- Module Builder ----------------
 
+async function requireStaff() {
+  const user = await getCurrentUser();
+  if (!(user.isAdmin || user.isManager)) throw new Error("Not authorized to edit content");
+  return user;
+}
+
 export async function saveAllSections(moduleId: string, formData: FormData) {
+  await requireStaff();
   const d = db();
   const mv = d.moduleVersions.find((v) => v.moduleId === moduleId);
   if (!mv) throw new Error("Module not found");
@@ -49,6 +58,7 @@ export async function saveAllSections(moduleId: string, formData: FormData) {
 }
 
 export async function addScript(formData: FormData) {
+  await requireStaff();
   const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
   const type = z.string().parse(formData.get("type")) as never;
   const body = z.string().parse(formData.get("body"));
@@ -58,6 +68,7 @@ export async function addScript(formData: FormData) {
 }
 
 export async function deleteScript(formData: FormData) {
+  await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const d = db();
   d.scripts = d.scripts.filter((s) => s.id !== id);
@@ -66,6 +77,7 @@ export async function deleteScript(formData: FormData) {
 }
 
 export async function addChecklistItem(formData: FormData) {
+  await requireStaff();
   const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
   const text = z.string().min(1).parse(formData.get("text"));
   const d = db();
@@ -82,6 +94,7 @@ export async function addChecklistItem(formData: FormData) {
 }
 
 export async function deleteChecklistItem(formData: FormData) {
+  await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const d = db();
   d.checklistItems = d.checklistItems.filter((c) => c.id !== id);
@@ -100,6 +113,7 @@ function getOrCreateQuiz(moduleVersionId: string) {
 }
 
 export async function addQuizQuestion(formData: FormData) {
+  await requireStaff();
   const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
   const prompt = z.string().min(1).parse(formData.get("prompt"));
   const correctIndex = Number(formData.get("correctIndex"));
@@ -127,6 +141,7 @@ export async function addQuizQuestion(formData: FormData) {
 }
 
 export async function deleteQuizQuestion(formData: FormData) {
+  await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const d = db();
   d.quizQuestions = d.quizQuestions.filter((q) => q.id !== id);
@@ -135,6 +150,7 @@ export async function deleteQuizQuestion(formData: FormData) {
 }
 
 export async function updateScenario(formData: FormData) {
+  await requireStaff();
   const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
   const prompt = z.string().parse(formData.get("prompt"));
   const d = db();
@@ -156,6 +172,7 @@ const publishSchema = z.object({
 });
 
 export async function publishModule(formData: FormData) {
+  await requireStaff();
   const { moduleId, changeType, changelog } = publishSchema.parse({
     moduleId: formData.get("moduleId"),
     changeType: formData.get("changeType"),
@@ -288,6 +305,7 @@ const evalSchema = z.object({
 });
 
 export async function submitPracticalEvaluation(formData: FormData) {
+  await requireStaff();
   const parsed = evalSchema.parse({
     userId: formData.get("userId"),
     moduleId: formData.get("moduleId"),
@@ -318,6 +336,7 @@ export async function submitPracticalEvaluation(formData: FormData) {
 const certifySchema = z.object({ userId: z.string(), moduleId: z.string(), notes: z.string() });
 
 export async function certifyUser(formData: FormData) {
+  await requireStaff();
   const { userId, moduleId, notes } = certifySchema.parse({
     userId: formData.get("userId"),
     moduleId: formData.get("moduleId"),
@@ -343,4 +362,254 @@ export async function certifyUser(formData: FormData) {
   revalidatePath("/certify");
   revalidatePath("/matrix");
   revalidatePath(`/cert/${cert.id}`);
+}
+
+// ---------------- People (admin) ----------------
+
+async function requireAdmin() {
+  const user = await getCurrentUser();
+  if (!user.isAdmin) throw new Error("Admin access required");
+  return user;
+}
+
+function autoAssignForRole(userId: string, roleId: string, assignedBy: string) {
+  const d = db();
+  const requirements = d.roleModuleRequirements.filter((r) => r.roleId === roleId && r.isRequired);
+  for (const req of requirements) {
+    const already = d.assignments.some((a) => a.userId === userId && a.moduleId === req.moduleId);
+    if (!already) {
+      d.assignments.push({
+        id: newId("asn"),
+        userId,
+        moduleId: req.moduleId,
+        assignedBy,
+        assignedAt: new Date().toISOString(),
+        dueAt: null,
+        source: "auto",
+      });
+    }
+  }
+}
+
+const createUserSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  roleId: z.string(),
+});
+
+export async function createUser(formData: FormData) {
+  const admin = await requireAdmin();
+  const { name, email, roleId } = createUserSchema.parse({
+    name: formData.get("name"),
+    email: formData.get("email"),
+    roleId: formData.get("roleId"),
+  });
+  const d = db();
+  if (d.users.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
+    throw new Error("A person with that email already exists");
+  }
+  const id = newId("u");
+  d.users.push({
+    id,
+    name,
+    email,
+    roleId,
+    isAdmin: formData.get("isAdmin") === "on",
+    isManager: formData.get("isManager") === "on",
+    employmentStatus: "active",
+    hiredAt: new Date().toISOString(),
+  });
+  autoAssignForRole(id, roleId, admin.id);
+  persist();
+  revalidatePath("/people");
+  redirect(`/people/${id}`);
+}
+
+const updateUserSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  email: z.string().email(),
+  roleId: z.string(),
+});
+
+export async function updateUser(formData: FormData) {
+  const admin = await requireAdmin();
+  const { id, name, email, roleId } = updateUserSchema.parse({
+    id: formData.get("id"),
+    name: formData.get("name"),
+    email: formData.get("email"),
+    roleId: formData.get("roleId"),
+  });
+  const d = db();
+  const user = d.users.find((u) => u.id === id);
+  if (!user) throw new Error("User not found");
+  const roleChanged = user.roleId !== roleId;
+  user.name = name;
+  user.email = email;
+  user.roleId = roleId;
+  user.isAdmin = formData.get("isAdmin") === "on";
+  user.isManager = formData.get("isManager") === "on";
+  if (roleChanged) autoAssignForRole(id, roleId, admin.id);
+  persist();
+  revalidatePath("/people");
+  revalidatePath(`/people/${id}`);
+}
+
+export async function setUserActive(formData: FormData) {
+  await requireAdmin();
+  const id = z.string().parse(formData.get("id"));
+  const active = formData.get("active") === "true";
+  const d = db();
+  const user = d.users.find((u) => u.id === id);
+  if (!user) throw new Error("User not found");
+  user.employmentStatus = active ? "active" : "inactive";
+  persist();
+  revalidatePath("/people");
+  revalidatePath(`/people/${id}`);
+}
+
+// ---------------- Roles ----------------
+
+const roleSchema = z.object({
+  name: z.string().min(1),
+  description: z.string(),
+  parentRoleId: z.string().optional(),
+});
+
+export async function createRole(formData: FormData) {
+  await requireAdmin();
+  const { name, description, parentRoleId } = roleSchema.parse({
+    name: formData.get("name"),
+    description: formData.get("description"),
+    parentRoleId: formData.get("parentRoleId") || undefined,
+  });
+  const d = db();
+  d.roles.push({ id: newId("role"), name, description, parentRoleId: parentRoleId ?? null });
+  persist();
+  revalidatePath("/people/roles");
+}
+
+export async function updateRole(formData: FormData) {
+  await requireAdmin();
+  const id = z.string().parse(formData.get("id"));
+  const { name, description, parentRoleId } = roleSchema.parse({
+    name: formData.get("name"),
+    description: formData.get("description"),
+    parentRoleId: formData.get("parentRoleId") || undefined,
+  });
+  if (parentRoleId === id) throw new Error("A role cannot be its own parent");
+  const d = db();
+  const role = d.roles.find((r) => r.id === id);
+  if (!role) throw new Error("Role not found");
+  role.name = name;
+  role.description = description;
+  role.parentRoleId = parentRoleId ?? null;
+  persist();
+  revalidatePath("/people/roles");
+}
+
+export async function addResponsibility(formData: FormData) {
+  await requireAdmin();
+  const roleId = z.string().parse(formData.get("roleId"));
+  const title = z.string().min(1).parse(formData.get("title"));
+  const d = db();
+  const existing = d.responsibilities.filter((r) => r.roleId === roleId);
+  d.responsibilities.push({ id: newId("resp"), roleId, title, sortOrder: existing.length + 1 });
+  persist();
+  revalidatePath("/people/roles");
+}
+
+export async function deleteResponsibility(formData: FormData) {
+  await requireAdmin();
+  const id = z.string().parse(formData.get("id"));
+  const d = db();
+  d.responsibilities = d.responsibilities.filter((r) => r.id !== id);
+  persist();
+  revalidatePath("/people/roles");
+}
+
+// ---------------- Groups ----------------
+
+export async function createGroup(formData: FormData) {
+  await requireAdmin();
+  const name = z.string().min(1).parse(formData.get("name"));
+  const description = z.string().parse(formData.get("description"));
+  const d = db();
+  const id = newId("group");
+  d.groups.push({ id, name, description });
+  persist();
+  revalidatePath("/groups");
+  redirect(`/groups/${id}`);
+}
+
+export async function addGroupMember(formData: FormData) {
+  await requireAdmin();
+  const groupId = z.string().parse(formData.get("groupId"));
+  const userId = z.string().parse(formData.get("userId"));
+  const d = db();
+  const already = d.groupMembers.some((m) => m.groupId === groupId && m.userId === userId);
+  if (!already) {
+    d.groupMembers.push({ id: newId("gm"), groupId, userId });
+    persist();
+  }
+  revalidatePath(`/groups/${groupId}`);
+}
+
+export async function removeGroupMember(formData: FormData) {
+  await requireAdmin();
+  const id = z.string().parse(formData.get("id"));
+  const d = db();
+  const member = d.groupMembers.find((m) => m.id === id);
+  d.groupMembers = d.groupMembers.filter((m) => m.id !== id);
+  persist();
+  if (member) revalidatePath(`/groups/${member.groupId}`);
+}
+
+// ---------------- Content creation ----------------
+
+const createModuleSchema = z.object({
+  title: z.string().min(1),
+  phase: z.coerce.number().default(1),
+  templateKey: z.string().optional(),
+});
+
+export async function createModule(formData: FormData) {
+  const user = await getCurrentUser();
+  if (!(user.isAdmin || user.isManager)) throw new Error("Not authorized to create content");
+  const { title, phase, templateKey } = createModuleSchema.parse({
+    title: formData.get("title"),
+    phase: formData.get("phase") || 1,
+    templateKey: formData.get("templateKey") || undefined,
+  });
+  const d = db();
+  const moduleId = newId("mod");
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  d.modules.push({
+    id: moduleId,
+    title,
+    slug,
+    phase,
+    ownerId: user.id,
+    currentVersion: 0,
+    status: "draft",
+    estimatedMinutes: 15,
+    createdAt: new Date().toISOString(),
+  });
+  const moduleVersionId = newId("mv");
+  d.moduleVersions.push({
+    id: moduleVersionId,
+    moduleId,
+    version: 0,
+    changeType: null,
+    publishedBy: null,
+    publishedAt: null,
+    changelog: templateKey ? `Started from the "${templateKey}" template.` : "",
+    isDraft: true,
+  });
+  for (const sec of SOP_SECTIONS) {
+    d.sopSections.push({ id: newId("sop"), moduleVersionId, sectionKey: sec.key, body: "" });
+  }
+  persist();
+  revalidatePath("/builder");
+  redirect(`/builder/${moduleId}`);
 }

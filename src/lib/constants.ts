@@ -16,6 +16,52 @@ export const SOP_SECTIONS = [
 
 export type SopSectionKey = (typeof SOP_SECTIONS)[number]["key"];
 
+export const SECTION_GUIDANCE: Record<SopSectionKey, string> = {
+  purpose: "Why does this process exist? What problem does it solve for the customer or the business?",
+  when_to_use: "What triggers this — a phone call, a form, a specific job status? Be concrete.",
+  person_responsible: "Which role owns this end to end? Name the role, not the person.",
+  response_deadline: "What's the time window? \"As soon as possible\" is not a deadline.",
+  information_required: "What has to be collected before this can move forward?",
+  steps: "Numbered steps, in the order they actually happen. This becomes the checklist.",
+  scripts: "Point to the scripts below — don't restate them here.",
+  decision_rules: "The branches: if X, do Y. This is where most training gaps hide.",
+  documentation: "Where does this get logged, and how fast? Undocumented work didn't happen.",
+  checklist: "Point to the checklist below.",
+  common_mistakes: "What does a new hire usually get wrong here? Be specific, not generic.",
+  escalation: "When does this go to a manager, and how?",
+  training_video: "What should the video(s) cover, and roughly how long?",
+};
+
+export const TEMPLATES = [
+  {
+    key: "customer-call",
+    title: "Customer Call Handling",
+    description: "For any process that starts with the phone ringing — leads, service calls, follow-ups.",
+  },
+  {
+    key: "site-safety",
+    title: "Job Site Safety Checklist",
+    description: "Pre- and post-job safety steps for crews on site.",
+  },
+  {
+    key: "onboarding",
+    title: "New Hire Onboarding",
+    description: "First day, first week — what a new hire needs to do and who they need to meet.",
+  },
+  {
+    key: "escalation",
+    title: "Complaint & Escalation Handling",
+    description: "De-escalation steps and the handoff to a manager.",
+  },
+  {
+    key: "warranty",
+    title: "Warranty / Callback Handling",
+    description: "What happens when a completed job gets a callback.",
+  },
+] as const;
+
+export type TemplateKey = (typeof TEMPLATES)[number]["key"];
+
 export const SCRIPT_TYPES = [
   { key: "phone", label: "Phone" },
   { key: "text", label: "Text" },

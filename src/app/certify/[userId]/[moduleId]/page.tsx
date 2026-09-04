@@ -1,12 +1,15 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
+import { getCurrentUser } from "@/lib/session";
 import { RUBRIC_DIMENSIONS } from "@/lib/constants";
 import { StatusPill } from "@/components/StatusPill";
 import { submitPracticalEvaluation, certifyUser } from "@/lib/actions";
 
 export default async function EvaluatePage({ params }: { params: Promise<{ userId: string; moduleId: string }> }) {
   const { userId, moduleId } = await params;
+  const viewer = await getCurrentUser();
+  if (!(viewer.isAdmin || viewer.isManager)) redirect("/");
   const db = getDb();
   const user = db.users.find((u) => u.id === userId);
   const mod = db.modules.find((m) => m.id === moduleId);

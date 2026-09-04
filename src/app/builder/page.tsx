@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getDb } from "@/lib/db";
+import { getCurrentUser } from "@/lib/session";
 import { moduleCompleteness } from "@/lib/derive";
 
 const TABS = [
@@ -11,6 +12,8 @@ const TABS = [
 export default async function BuilderIndexPage({ searchParams }: { searchParams: Promise<{ tab?: string; q?: string }> }) {
   const { tab = "all", q = "" } = await searchParams;
   const db = getDb();
+  const viewer = await getCurrentUser();
+  const canAuthor = viewer.isAdmin || viewer.isManager;
 
   let modules = db.modules;
   if (tab === "published") modules = modules.filter((m) => m.status === "published");
@@ -26,6 +29,16 @@ export default async function BuilderIndexPage({ searchParams }: { searchParams:
             Thirteen fixed SOP sections per module, a completeness meter, and an explicit publish step.
           </p>
         </div>
+        {canAuthor && (
+          <div className="flex gap-2">
+            <Link href="/builder/templates" className="btn-secondary">
+              View Templates
+            </Link>
+            <Link href="/builder/new" className="btn-primary">
+              + New Module
+            </Link>
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2 mb-5">

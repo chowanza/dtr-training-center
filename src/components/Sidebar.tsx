@@ -1,12 +1,22 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { X } from "lucide-react";
-import { NAV_ITEMS } from "./nav-config";
+import { NAV_ITEMS, canAccess } from "./nav-config";
 
-export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function Sidebar({
+  open,
+  onClose,
+  currentUser,
+}: {
+  open: boolean;
+  onClose: () => void;
+  currentUser: { isAdmin: boolean; isManager: boolean };
+}) {
   const pathname = usePathname();
+  const items = NAV_ITEMS.filter((item) => canAccess(item.access, currentUser));
 
   return (
     <>
@@ -17,16 +27,19 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         } lg:translate-x-0`}
       >
         <div className="flex items-center justify-between px-5 h-16 border-b border-rule">
-          <Link href="/" className="flex items-baseline gap-1 font-[var(--font-display)] font-bold text-[15px] leading-none">
-            <span className="text-navy">DREAM TEAM</span>
-            <span className="text-copper">ROOFING</span>
+          <Link href="/" className="flex items-center gap-2 min-w-0">
+            <Image src="/dtr-logo.webp" alt="Dream Team Roofing" width={32} height={32} className="rounded-full shrink-0" />
+            <span className="font-[var(--font-display)] font-bold text-[13px] leading-tight">
+              <span className="block text-navy">DREAM TEAM</span>
+              <span className="block text-copper">ROOFING</span>
+            </span>
           </Link>
           <button onClick={onClose} className="lg:hidden text-ink-3">
             <X size={18} />
           </button>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
-          {NAV_ITEMS.map((item) => {
+          {items.map((item) => {
             const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
             const Icon = item.icon;
             return (

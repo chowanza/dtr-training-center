@@ -2,14 +2,13 @@ import Link from "next/link";
 import { getDb } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
 import { StatusPill } from "@/components/StatusPill";
+import { completionForUser } from "@/lib/derive";
 
 export default async function HomePage({ searchParams }: { searchParams: Promise<{ view?: string }> }) {
   const { view } = await searchParams;
-  const db = getDb();
   const user = await getCurrentUser();
-  const csrRole = db.roles.find((r) => r.name === "CSR")!;
-  const isTrainee = user.roleId === csrRole.id;
-  const activeView = view ?? (isTrainee ? "training" : "dashboard");
+  const isStaff = user.isAdmin || user.isManager;
+  const activeView = view ?? (isStaff ? "dashboard" : "training");
 
   return (
     <div>
@@ -45,20 +44,20 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
 
 async function DashboardView() {
   const db = getDb();
-  const csrRole = db.roles.find((r) => r.name === "CSR")!;
-  const csrUsers = db.users.filter((u) => u.roleId === csrRole.id);
+  const users = db.users.filter((u) => u.employmentStatus === "active");
   const modules = db.modules;
   const certified = db.certifications.filter((c) => c.status === "certified").length;
   const inProgress = db.certifications.filter((c) => c.status === "training" || c.status === "ready_for_test").length;
   const awaitingEval = db.certifications.filter((c) => c.status === "tested_passed").length;
+  const totalCerts = db.certifications.length;
 
   return (
     <div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <Stat label="Modules published" value={modules.filter((m) => m.status === "published").length} total={modules.length} />
-        <Stat label="Certified" value={certified} total={csrUsers.length * modules.length} />
-        <Stat label="In progress" value={inProgress} total={csrUsers.length * modules.length} />
-        <Stat label="Awaiting evaluation" value={awaitingEval} total={csrUsers.length * modules.length} accent="copper" />
+        <Stat label="Certified" value={certified} total={totalCerts} />
+        <Stat label="In progress" value={inProgress} total={totalCerts} />
+        <Stat label="Awaiting evaluation" value={awaitingEval} total={totalCerts} accent="copper" />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
@@ -70,10 +69,8 @@ async function DashboardView() {
             </Link>
           </div>
           <div className="space-y-3">
-            {csrUsers.map((u) => {
-              const certs = db.certifications.filter((c) => c.userId === u.id);
-              const done = certs.filter((c) => c.status === "certified").length;
-              const pct = modules.length ? Math.round((done / modules.length) * 100) : 0;
+            {users.map((u) => {
+              const { pct } = completionForUser(u.id);
               return (
                 <div key={u.id} className="flex items-center gap-3">
                   <span className="w-8 h-8 rounded-full bg-navy-soft text-navy text-[11px] font-semibold flex items-center justify-center font-[var(--font-display)] shrink-0">

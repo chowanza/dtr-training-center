@@ -5,8 +5,7 @@ import { PageHead } from "@/components/PageHead";
 
 export default async function MatrixPage() {
   const db = getDb();
-  const csrRole = db.roles.find((r) => r.name === "CSR")!;
-  const csrUsers = db.users.filter((u) => u.roleId === csrRole.id);
+  const users = db.users.filter((u) => u.employmentStatus === "active");
   const modules = db.modules;
 
   return (
@@ -36,7 +35,7 @@ export default async function MatrixPage() {
             </tr>
           </thead>
           <tbody>
-            {csrUsers.map((user) => (
+            {users.map((user) => (
               <tr key={user.id} className="border-b border-rule last:border-b-0">
                 <td className="px-4 py-3 font-medium sticky left-0 bg-surface whitespace-nowrap">{user.name}</td>
                 {modules.map((m) => {

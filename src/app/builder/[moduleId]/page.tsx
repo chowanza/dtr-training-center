@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
+import { getCurrentUser } from "@/lib/session";
 import { moduleCompleteness } from "@/lib/derive";
-import { SOP_SECTIONS, SCRIPT_TYPES } from "@/lib/constants";
+import { SOP_SECTIONS, SCRIPT_TYPES, SECTION_GUIDANCE } from "@/lib/constants";
 import {
   saveAllSections,
   addScript,
@@ -17,6 +18,8 @@ import {
 
 export default async function ModuleEditorPage({ params }: { params: Promise<{ moduleId: string }> }) {
   const { moduleId } = await params;
+  const viewer = await getCurrentUser();
+  if (!(viewer.isAdmin || viewer.isManager)) redirect("/builder");
   const db = getDb();
   const mod = db.modules.find((m) => m.id === moduleId);
   if (!mod) notFound();
@@ -80,8 +83,9 @@ export default async function ModuleEditorPage({ params }: { params: Promise<{ m
                 <textarea
                   name={`section:${row?.id}`}
                   defaultValue={row?.body ?? ""}
+                  placeholder={SECTION_GUIDANCE[sec.key]}
                   rows={sec.key === "steps" || sec.key === "decision_rules" || sec.key === "common_mistakes" ? 4 : 2}
-                  className="w-full border border-rule-2 rounded bg-surface px-3 py-2 text-sm text-ink focus:outline-none focus:border-copper"
+                  className="w-full border border-rule-2 rounded bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:border-copper"
                 />
               </div>
             );

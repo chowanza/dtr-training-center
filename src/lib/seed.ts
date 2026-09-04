@@ -11,12 +11,25 @@ export function createSeedDatabase(): Database {
     return d.toISOString();
   };
 
-  const roleCsr = { id: "role-csr", name: "CSR", description: "Customer Service Representative — first touch on every inbound lead." };
+  const roleOwner = { id: "role-owner", name: "Owner", description: "Company owner.", parentRoleId: null };
+  const roleOfficeManager = { id: "role-office-manager", name: "Office Manager", description: "Manages CSRs, authors training content, certifies trainees.", parentRoleId: "role-owner" };
+  const roleCsr = { id: "role-csr", name: "CSR", description: "Customer Service Representative — first touch on every inbound lead.", parentRoleId: "role-office-manager" };
 
-  const uOwen = { id: "u-owen", name: "Owen", email: "owen@dreamteamroofingfl.com", roleId: "role-owner", isManager: true, employmentStatus: "active" as const, hiredAt: day(0) };
-  const uLuis = { id: "u-luis", name: "Luis", email: "luis@dreamteamroofingfl.com", roleId: "role-office-manager", isManager: true, employmentStatus: "active" as const, hiredAt: day(0) };
-  const uArmando = { id: "u-armando", name: "Armando", email: "armando@dreamteamroofingfl.com", roleId: "role-csr", isManager: false, employmentStatus: "active" as const, hiredAt: day(2) };
-  const uMaria = { id: "u-maria", name: "Maria Lopez", email: "maria@dreamteamroofingfl.com", roleId: "role-csr", isManager: false, employmentStatus: "active" as const, hiredAt: day(8) };
+  const uOwen = { id: "u-owen", name: "Owen", email: "owen@dreamteamroofingfl.com", roleId: "role-owner", isAdmin: true, isManager: true, employmentStatus: "active" as const, hiredAt: day(0) };
+  const uLuis = { id: "u-luis", name: "Luis", email: "luis@dreamteamroofingfl.com", roleId: "role-office-manager", isAdmin: true, isManager: true, employmentStatus: "active" as const, hiredAt: day(0) };
+  const uArmando = { id: "u-armando", name: "Armando", email: "armando@dreamteamroofingfl.com", roleId: "role-csr", isAdmin: false, isManager: false, employmentStatus: "active" as const, hiredAt: day(2) };
+  const uMaria = { id: "u-maria", name: "Maria Lopez", email: "maria@dreamteamroofingfl.com", roleId: "role-csr", isAdmin: false, isManager: false, employmentStatus: "active" as const, hiredAt: day(8) };
+
+  const groups: Database["groups"] = [
+    { id: "group-leadership", name: "Leadership", description: "Owner and office management." },
+    { id: "group-csr", name: "CSR Team", description: "Customer service representatives." },
+  ];
+  const groupMembers: Database["groupMembers"] = [
+    { id: "gm-1", groupId: "group-leadership", userId: uOwen.id },
+    { id: "gm-2", groupId: "group-leadership", userId: uLuis.id },
+    { id: "gm-3", groupId: "group-csr", userId: uArmando.id },
+    { id: "gm-4", groupId: "group-csr", userId: uMaria.id },
+  ];
 
   const responsibilities = [
     { id: "resp-1", roleId: "role-csr", title: "Answer and qualify inbound leads", sortOrder: 1 },
@@ -278,12 +291,10 @@ export function createSeedDatabase(): Database {
   ];
 
   return {
-    roles: [
-      { id: "role-owner", name: "Owner", description: "Company owner." },
-      { id: "role-office-manager", name: "Office Manager", description: "Manages CSRs, authors training content, certifies trainees." },
-      roleCsr,
-    ],
+    roles: [roleOwner, roleOfficeManager, roleCsr],
     users: [uOwen, uLuis, uArmando, uMaria],
+    groups,
+    groupMembers,
     responsibilities,
     roleModuleRequirements,
     modules: allModules,

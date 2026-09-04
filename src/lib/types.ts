@@ -4,6 +4,7 @@ export interface Role {
   id: string;
   name: string;
   description: string;
+  parentRoleId: string | null;
 }
 
 export interface User {
@@ -11,9 +12,22 @@ export interface User {
   name: string;
   email: string;
   roleId: string;
+  isAdmin: boolean;
   isManager: boolean;
   employmentStatus: "active" | "inactive";
   hiredAt: string;
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface GroupMember {
+  id: string;
+  groupId: string;
+  userId: string;
 }
 
 export interface Responsibility {
@@ -177,6 +191,8 @@ export interface Assignment {
 export interface Database {
   roles: Role[];
   users: User[];
+  groups: Group[];
+  groupMembers: GroupMember[];
   responsibilities: Responsibility[];
   roleModuleRequirements: RoleModuleRequirement[];
   modules: Module[];
