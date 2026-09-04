@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #f5f2ee;
+  --surface: #ffffff;
+  --surface-2: #ede8e2;
+  --ink: #2a2421;
+  --ink-2: #5c534c;
+  --ink-3: #8a7f76;
+  --rule: #ddd5cc;
+  --rule-2: #c8bdb1;
+  --copper: #9e5723;
+  --copper-soft: #f0e0d2;
+  --patina: #26705f;
+  --patina-soft: #dcebe6;
+  --amber: #8a6410;
+  --amber-soft: #f4e8cc;
+  --brick: #9a3427;
+  --brick-soft: #f5ddd8;
+  --indigo: #42548a;
+  --indigo-soft: #dfe4f2;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-rule: var(--rule);
+  --color-rule-2: var(--rule-2);
+  --color-copper: var(--copper);
+  --color-copper-soft: var(--copper-soft);
+  --color-patina: var(--patina);
+  --color-patina-soft: var(--patina-soft);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-brick: var(--brick);
+  --color-brick-soft: var(--brick-soft);
+  --color-indigo: var(--indigo);
+  --color-indigo-soft: var(--indigo-soft);
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #17140f;
+    --surface: #201c17;
+    --surface-2: #2a251f;
+    --ink: #efe9e1;
+    --ink-2: #b8ac9f;
+    --ink-3: #8a7d6f;
+    --rule: #352f27;
+    --rule-2: #4a4238;
+    --copper: #d98b4e;
+    --copper-soft: #3a2718;
+    --patina: #57bfa4;
+    --patina-soft: #16332c;
+    --amber: #d3a63c;
+    --amber-soft: #332810;
+    --brick: #d97565;
+    --brick-soft: #361c17;
+    --indigo: #8fa2dc;
+    --indigo-soft: #1d2338;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+.pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid;
+  white-space: nowrap;
+  display: inline-block;
+}
+.p-neutral { background: var(--surface-2); border-color: var(--rule-2); color: var(--ink-2); }
+.p-amber { background: var(--amber-soft); border-color: var(--amber); color: var(--amber); }
+.p-indigo { background: var(--indigo-soft); border-color: var(--indigo); color: var(--indigo); }
+.p-good { background: var(--patina-soft); border-color: var(--patina); color: var(--patina); }
+.p-bad { background: var(--brick-soft); border-color: var(--brick); color: var(--brick); }
+.p-cert { background: var(--patina); border-color: var(--patina); color: var(--paper); }
+
+.btn-primary {
+  display: inline-block;
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: 4px;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+  transition: opacity .15s;
+}
+.btn-primary:hover:not(:disabled) { opacity: .85; }
+
+.btn-secondary {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 14px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--rule-2);
+  transition: border-color .15s, color .15s;
+}
+.btn-secondary:hover:not(:disabled) { border-color: var(--copper); color: var(--copper); }
