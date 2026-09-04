@@ -2,9 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getDb } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
-import { SOP_SECTIONS, SCRIPT_TYPES } from "@/lib/constants";
+import { SCRIPT_TYPES } from "@/lib/constants";
+import { topicsForModuleVersion, stepsForTopic, completedStepIds, quizzesForModuleVersion } from "@/lib/derive";
 import { StatusPill } from "@/components/StatusPill";
-import { startTraining, markReadyForTest, submitQuizAttempt } from "@/lib/actions";
+import { StepEmbedView } from "@/components/StepEmbedView";
+import { startTraining, completeStep, submitQuizAttempt } from "@/lib/actions";
+import type { Step, StepEmbed } from "@/lib/types";
 
 export default async function ModuleViewerPage({ params }: { params: Promise<{ moduleId: string }> }) {
   const { moduleId } = await params;
@@ -13,16 +16,24 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
   const mod = db.modules.find((m) => m.id === moduleId);
   if (!mod) notFound();
   const mv = db.moduleVersions.find((v) => v.moduleId === moduleId)!;
-  const sections = db.sopSections.filter((s) => s.moduleVersionId === mv.id && s.body.trim());
+  const topics = topicsForModuleVersion(mv.id);
   const scripts = db.scripts.filter((s) => s.moduleVersionId === mv.id);
   const checklist = db.checklistItems.filter((c) => c.moduleVersionId === mv.id).sort((a, b) => a.sortOrder - b.sortOrder);
-  const quiz = db.quizzes.find((q) => q.moduleVersionId === mv.id);
-  const questions = quiz ? db.quizQuestions.filter((q) => q.quizId === quiz.id) : [];
   const cert = db.certifications.find((c) => c.userId === user.id && c.moduleId === moduleId);
   const status = cert?.status ?? "not_started";
-  const lastAttempt = quiz
-    ? db.quizAttempts.filter((a) => a.userId === user.id && a.quizId === quiz.id).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0]
-    : undefined;
+  const done = completedStepIds(user.id);
+
+  const isReferenceMode = status === "certified" || status === "tested_passed";
+  const isActiveFlow = status === "training" || status === "ready_for_test" || status === "tested_failed" || status === "needs_retraining";
+
+  // The first not-yet-completed step, in reading order across all topics — nothing after it unlocks.
+  const allSteps = topics.flatMap((t) => stepsForTopic(t.id));
+  const currentStep = allSteps.find((s) => !done.has(s.id));
+  const allStepsDone = isActiveFlow && !currentStep;
+
+  const quizzesWithQuestions = quizzesForModuleVersion(mv.id)
+    .map((q) => ({ quiz: q, questions: db.quizQuestions.filter((qq) => qq.quizId === q.id) }))
+    .filter((q) => q.questions.length > 0);
 
   if (mod.status !== "published") {
     return (
@@ -52,13 +63,14 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
       {status === "certified" && (
         <Banner tone="good">
           You&apos;re certified on this module. <Link href={`/cert/${cert!.id}`} className="underline">View your certification record</Link>.
+          Everything below stays open as a reference.
         </Banner>
       )}
       {status === "needs_retraining" && (
-        <Banner tone="amber">This module was updated since you were certified. Please retrain and retest.</Banner>
+        <Banner tone="amber">This module was updated since you were certified. Review anything new below, then retake the knowledge check.</Banner>
       )}
       {status === "tested_passed" && (
-        <Banner tone="indigo">Quiz passed. Your manager still needs to score your practical evaluation and certify you.</Banner>
+        <Banner tone="indigo">Every knowledge check passed. Your manager still needs to score your practical evaluation and certify you.</Banner>
       )}
 
       {status === "not_started" && (
@@ -68,20 +80,25 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
         </form>
       )}
 
-      {status !== "not_started" && (
-        <div className="space-y-6 mt-2">
-          {sections.map((s) => (
-            <div key={s.id}>
-              <h3 className="font-[var(--font-mono)] text-[11px] uppercase tracking-wider text-ink-3 mb-1.5">
-                {SOP_SECTIONS.find((x) => x.key === s.sectionKey)?.label}
-              </h3>
-              <p className="text-[14.5px] whitespace-pre-wrap leading-relaxed">{s.body}</p>
-            </div>
-          ))}
+      {(isActiveFlow || isReferenceMode) && (
+        <div className="space-y-8 mt-2">
+          {topics.map((topic) => {
+            const steps = stepsForTopic(topic.id);
+            return (
+              <div key={topic.id}>
+                <h2 className="font-[var(--font-display)] font-semibold text-[15px] mb-3 pb-2 border-b border-rule">{topic.title}</h2>
+                <div className="space-y-5">
+                  {steps.map((step) => (
+                    <StepView key={step.id} step={step} unlocked={isReferenceMode || done.has(step.id) || step.id === currentStep?.id} isCurrent={!isReferenceMode && step.id === currentStep?.id} moduleId={moduleId} moduleVersionId={mv.id} embeds={db.stepEmbeds.filter((e) => e.stepId === step.id)} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
 
           {scripts.length > 0 && (
             <div>
-              <h3 className="font-[var(--font-mono)] text-[11px] uppercase tracking-wider text-ink-3 mb-2">Scripts</h3>
+              <h2 className="font-[var(--font-display)] font-semibold text-[15px] mb-3 pb-2 border-b border-rule">Scripts</h2>
               <div className="space-y-2">
                 {scripts.map((s) => (
                   <div key={s.id} className="border border-rule rounded bg-surface p-3">
@@ -97,7 +114,7 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
 
           {checklist.length > 0 && (
             <div>
-              <h3 className="font-[var(--font-mono)] text-[11px] uppercase tracking-wider text-ink-3 mb-2">Checklist</h3>
+              <h2 className="font-[var(--font-display)] font-semibold text-[15px] mb-3 pb-2 border-b border-rule">Checklist</h2>
               <ul className="space-y-1.5">
                 {checklist.map((c) => (
                   <li key={c.id} className="flex items-center gap-2 text-sm">
@@ -110,17 +127,73 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
             </div>
           )}
 
-          {status === "training" && (
-            <form action={markReadyForTest} className="pt-2">
-              <input type="hidden" name="moduleId" value={moduleId} />
-              <button className="btn-primary">I&apos;ve reviewed this — Take the Quiz</button>
-            </form>
-          )}
-
-          {(status === "ready_for_test" || status === "tested_failed") && quiz && questions.length > 0 && (
-            <QuizForm quiz={quiz} moduleId={moduleId} version={mv.version} questions={questions} lastAttempt={lastAttempt} failed={status === "tested_failed"} />
+          {isActiveFlow && allStepsDone && quizzesWithQuestions.length > 0 && (
+            <div>
+              <h2 className="font-[var(--font-display)] font-semibold text-[15px] mb-3 pb-2 border-b border-rule">Knowledge Checks</h2>
+              <div className="space-y-4">
+                {quizzesWithQuestions.map(({ quiz, questions }) => {
+                  const topic = topics.find((t) => t.id === quiz.topicId);
+                  const attempts = db.quizAttempts.filter((a) => a.userId === user.id && a.quizId === quiz.id).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+                  const passed = attempts.some((a) => a.passed);
+                  const lastAttempt = attempts[0];
+                  return (
+                    <QuizCard
+                      key={quiz.id}
+                      title={topic?.title ?? "Knowledge check"}
+                      quiz={quiz}
+                      moduleId={moduleId}
+                      version={mv.version}
+                      questions={questions}
+                      passed={passed}
+                      lastAttempt={lastAttempt}
+                    />
+                  );
+                })}
+              </div>
+            </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+function StepView({
+  step,
+  unlocked,
+  isCurrent,
+  moduleId,
+  moduleVersionId,
+  embeds,
+}: {
+  step: Step;
+  unlocked: boolean;
+  isCurrent: boolean;
+  moduleId: string;
+  moduleVersionId: string;
+  embeds: StepEmbed[];
+}) {
+  if (!unlocked) {
+    return <div className="text-sm text-ink-3 pl-3 border-l-2 border-rule">{step.title} — locked</div>;
+  }
+  return (
+    <div className="pl-3 border-l-2 border-patina">
+      <h3 className="font-[var(--font-mono)] text-[11px] uppercase tracking-wider text-ink-3 mb-1.5">{step.title}</h3>
+      <p className="text-[14.5px] whitespace-pre-wrap leading-relaxed mb-2">{step.body}</p>
+      {embeds.length > 0 && (
+        <div className="space-y-2 mb-2">
+          {embeds.map((e) => (
+            <StepEmbedView key={e.id} embed={e} />
+          ))}
+        </div>
+      )}
+      {isCurrent && (
+        <form action={completeStep} className="mt-2">
+          <input type="hidden" name="stepId" value={step.id} />
+          <input type="hidden" name="moduleId" value={moduleId} />
+          <input type="hidden" name="moduleVersionId" value={moduleVersionId} />
+          <button className="btn-primary text-[13px]">Mark Complete &amp; Continue</button>
+        </form>
       )}
     </div>
   );
@@ -135,24 +208,35 @@ function Banner({ tone, children }: { tone: "good" | "amber" | "indigo"; childre
   return <div className={`border rounded p-3 text-sm mb-5 ${cls}`}>{children}</div>;
 }
 
-function QuizForm({
+function QuizCard({
+  title,
   quiz,
   moduleId,
   version,
   questions,
+  passed,
   lastAttempt,
-  failed,
 }: {
+  title: string;
   quiz: { id: string; passingScore: number };
   moduleId: string;
   version: number;
   questions: { id: string; prompt: string; options: { id: string; text: string; isCorrect: boolean; explanation: string }[] }[];
+  passed: boolean;
   lastAttempt?: { score: number; passed: boolean; answers: Record<string, string> };
-  failed: boolean;
 }) {
+  if (passed) {
+    return (
+      <div className="border border-patina bg-patina-soft rounded-md p-4 flex items-center justify-between">
+        <span className="font-medium text-sm text-patina">{title}</span>
+        <span className="pill p-good">Passed</span>
+      </div>
+    );
+  }
+  const failed = !!lastAttempt && !lastAttempt.passed;
   return (
     <div className="border border-rule rounded-md bg-surface p-5">
-      <h3 className="font-[var(--font-display)] font-semibold mb-1">Quiz</h3>
+      <h3 className="font-[var(--font-display)] font-semibold mb-1">{title}</h3>
       <p className="text-xs text-ink-3 mb-4">Passing score: {quiz.passingScore}%</p>
       {failed && lastAttempt && (
         <Banner tone="amber">
@@ -187,7 +271,7 @@ function QuizForm({
           );
         })}
         <button type="submit" className="btn-primary">
-          Submit Quiz
+          Submit
         </button>
       </form>
     </div>

@@ -88,13 +88,16 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ u
               Save Changes
             </button>
           </form>
-          <form action={setUserActive} className="mt-3">
+          <form action={setUserActive} className="mt-3 inline-block mr-3">
             <input type="hidden" name="id" value={user.id} />
             <input type="hidden" name="active" value={user.employmentStatus === "active" ? "false" : "true"} />
             <button type="submit" className="btn-secondary">
               {user.employmentStatus === "active" ? "Deactivate person" : "Reactivate person"}
             </button>
           </form>
+          <Link href={`/people/${user.id}/delete`} className="text-xs text-brick hover:underline">
+            Delete person permanently
+          </Link>
         </div>
       )}
 

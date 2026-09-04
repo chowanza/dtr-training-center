@@ -7,8 +7,8 @@ import { getDb, newId, persist } from "./db";
 import { getCurrentUser, setCurrentUserCookie } from "./session";
 import type { CertStatus } from "./constants";
 import type { RubricKey } from "./constants";
-import { SOP_SECTIONS } from "./constants";
-import { moduleCompleteness } from "./derive";
+import { STARTER_OUTLINE } from "./constants";
+import { moduleCompleteness, allModuleQuizzesPassed, orderedSteps, topicsForModuleVersion } from "./derive";
 
 function db() {
   return getDb();
@@ -42,19 +42,107 @@ async function requireStaff() {
   return user;
 }
 
-export async function saveAllSections(moduleId: string, formData: FormData) {
+export async function createTopic(formData: FormData) {
   await requireStaff();
+  const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const title = z.string().min(1).parse(formData.get("title"));
   const d = db();
-  const mv = d.moduleVersions.find((v) => v.moduleId === moduleId);
-  if (!mv) throw new Error("Module not found");
-  const sections = d.sopSections.filter((s) => s.moduleVersionId === mv.id);
-  for (const section of sections) {
-    const value = formData.get(`section:${section.id}`);
-    if (typeof value === "string") section.body = value;
-  }
+  const existing = topicsForModuleVersion(moduleVersionId);
+  d.topics.push({ id: newId("topic"), moduleVersionId, title, sortOrder: existing.length + 1 });
   persist();
   revalidatePath(`/builder/${moduleId}`);
-  revalidatePath("/builder");
+}
+
+export async function updateTopicTitle(formData: FormData) {
+  await requireStaff();
+  const id = z.string().parse(formData.get("id"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const title = z.string().min(1).parse(formData.get("title"));
+  const d = db();
+  const topic = d.topics.find((t) => t.id === id);
+  if (!topic) throw new Error("Topic not found");
+  topic.title = title;
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+export async function deleteTopic(formData: FormData) {
+  await requireStaff();
+  const id = z.string().parse(formData.get("id"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const d = db();
+  const stepIds = new Set(d.steps.filter((s) => s.topicId === id).map((s) => s.id));
+  const quizIds = new Set(d.quizzes.filter((q) => q.topicId === id).map((q) => q.id));
+  d.steps = d.steps.filter((s) => s.topicId !== id);
+  d.stepEmbeds = d.stepEmbeds.filter((e) => !stepIds.has(e.stepId));
+  d.stepProgress = d.stepProgress.filter((p) => !stepIds.has(p.stepId));
+  d.quizQuestions = d.quizQuestions.filter((q) => !quizIds.has(q.quizId));
+  d.quizzes = d.quizzes.filter((q) => q.topicId !== id);
+  d.topics = d.topics.filter((t) => t.id !== id);
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+export async function createStep(formData: FormData) {
+  await requireStaff();
+  const topicId = z.string().parse(formData.get("topicId"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const title = z.string().min(1).parse(formData.get("title"));
+  const d = db();
+  const existing = d.steps.filter((s) => s.topicId === topicId);
+  d.steps.push({ id: newId("step"), topicId, title, body: "", sortOrder: existing.length + 1 });
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+export async function updateStep(formData: FormData) {
+  await requireStaff();
+  const id = z.string().parse(formData.get("id"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const title = z.string().min(1).parse(formData.get("title"));
+  const body = z.string().parse(formData.get("body"));
+  const d = db();
+  const step = d.steps.find((s) => s.id === id);
+  if (!step) throw new Error("Step not found");
+  step.title = title;
+  step.body = body;
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+export async function deleteStep(formData: FormData) {
+  await requireStaff();
+  const id = z.string().parse(formData.get("id"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const d = db();
+  d.stepEmbeds = d.stepEmbeds.filter((e) => e.stepId !== id);
+  d.stepProgress = d.stepProgress.filter((p) => p.stepId !== id);
+  d.steps = d.steps.filter((s) => s.id !== id);
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+export async function addStepEmbed(formData: FormData) {
+  await requireStaff();
+  const stepId = z.string().parse(formData.get("stepId"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const kind = z.enum(["video", "image", "link"]).parse(formData.get("kind"));
+  const url = z.string().url().parse(formData.get("url"));
+  const label = z.string().parse(formData.get("label"));
+  db().stepEmbeds.push({ id: newId("embed"), stepId, kind, url, label: label || url });
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+export async function deleteStepEmbed(formData: FormData) {
+  await requireStaff();
+  const id = z.string().parse(formData.get("id"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const d = db();
+  d.stepEmbeds = d.stepEmbeds.filter((e) => e.id !== id);
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function addScript(formData: FormData) {
@@ -102,11 +190,11 @@ export async function deleteChecklistItem(formData: FormData) {
   revalidatePath("/builder", "layout");
 }
 
-function getOrCreateQuiz(moduleVersionId: string) {
+function getOrCreateQuiz(topicId: string) {
   const d = db();
-  let quiz = d.quizzes.find((q) => q.moduleVersionId === moduleVersionId);
+  let quiz = d.quizzes.find((q) => q.topicId === topicId);
   if (!quiz) {
-    quiz = { id: newId("quiz"), moduleVersionId, passingScore: 90 };
+    quiz = { id: newId("quiz"), topicId, passingScore: 90 };
     d.quizzes.push(quiz);
   }
   return quiz;
@@ -114,13 +202,14 @@ function getOrCreateQuiz(moduleVersionId: string) {
 
 export async function addQuizQuestion(formData: FormData) {
   await requireStaff();
-  const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
+  const topicId = z.string().parse(formData.get("topicId"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
   const prompt = z.string().min(1).parse(formData.get("prompt"));
   const correctIndex = Number(formData.get("correctIndex"));
   const optionTexts = [0, 1, 2, 3].map((i) => String(formData.get(`option${i}`) ?? "").trim()).filter(Boolean);
   if (optionTexts.length < 2) throw new Error("Need at least 2 options");
 
-  const quiz = getOrCreateQuiz(moduleVersionId);
+  const quiz = getOrCreateQuiz(topicId);
   const d = db();
   const questionId = newId("qq");
   d.quizQuestions.push({
@@ -137,16 +226,17 @@ export async function addQuizQuestion(formData: FormData) {
     })),
   });
   persist();
-  revalidatePath("/builder", "layout");
+  revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function deleteQuizQuestion(formData: FormData) {
   await requireStaff();
   const id = z.string().parse(formData.get("id"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
   const d = db();
   d.quizQuestions = d.quizQuestions.filter((q) => q.id !== id);
   persist();
-  revalidatePath("/builder", "layout");
+  revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function updateScenario(formData: FormData) {
@@ -235,15 +325,24 @@ export async function startTraining(formData: FormData) {
   revalidatePath("/matrix");
 }
 
-export async function markReadyForTest(formData: FormData) {
+export async function completeStep(formData: FormData) {
+  const stepId = z.string().parse(formData.get("stepId"));
   const moduleId = z.string().parse(formData.get("moduleId"));
+  const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
   const user = await getCurrentUser();
-  const cert = getOrCreateCert(user.id, moduleId);
-  if (cert.status === "training") {
-    logCertEvent(cert.id, cert.status, "ready_for_test", user.id, "Reviewed all SOP content, scripts, and checklist.");
-    cert.status = "ready_for_test";
-    persist();
+  const d = db();
+  if (!d.stepProgress.some((p) => p.userId === user.id && p.stepId === stepId)) {
+    d.stepProgress.push({ id: newId("progress"), userId: user.id, stepId, completedAt: new Date().toISOString() });
   }
+  const cert = getOrCreateCert(user.id, moduleId);
+  const steps = orderedSteps(moduleVersionId);
+  const done = new Set(d.stepProgress.filter((p) => p.userId === user.id).map((p) => p.stepId));
+  const allStepsDone = steps.length > 0 && steps.every((s) => done.has(s.id));
+  if (allStepsDone && cert.status === "training") {
+    logCertEvent(cert.id, cert.status, "ready_for_test", user.id, "Reviewed all topics and steps.");
+    cert.status = "ready_for_test";
+  }
+  persist();
   revalidatePath(`/learn/${moduleId}`);
   revalidatePath("/matrix");
 }
@@ -284,10 +383,16 @@ export async function submitQuizAttempt(formData: FormData) {
     submittedAt: new Date().toISOString(),
   });
 
+  const mod = d.modules.find((m) => m.id === moduleId);
+  const mv = mod ? d.moduleVersions.find((v) => v.moduleId === mod.id) : undefined;
   const cert = getOrCreateCert(user.id, moduleId);
-  const toStatus: CertStatus = passed ? "tested_passed" : "tested_failed";
-  logCertEvent(cert.id, cert.status, toStatus, user.id, `Quiz attempt scored ${score}% (passing ${quiz.passingScore}%).`);
-  cert.status = toStatus;
+  if (mv && allModuleQuizzesPassed(user.id, mv.id)) {
+    logCertEvent(cert.id, cert.status, "tested_passed", user.id, `Passed every knowledge check (latest: ${score}%).`);
+    cert.status = "tested_passed";
+  } else if (!passed) {
+    logCertEvent(cert.id, cert.status, "tested_failed", user.id, `Quiz attempt scored ${score}% (passing ${quiz.passingScore}%).`);
+    cert.status = "tested_failed";
+  }
   persist();
   revalidatePath(`/learn/${moduleId}`);
   revalidatePath("/matrix");
@@ -468,6 +573,27 @@ export async function setUserActive(formData: FormData) {
   revalidatePath(`/people/${id}`);
 }
 
+export async function deleteUser(formData: FormData) {
+  await requireAdmin();
+  const id = z.string().parse(formData.get("id"));
+  const d = db();
+  const user = d.users.find((u) => u.id === id);
+  if (!user) throw new Error("User not found");
+
+  const certIds = new Set(d.certifications.filter((c) => c.userId === id).map((c) => c.id));
+  d.certificationEvents = d.certificationEvents.filter((e) => !certIds.has(e.certificationId));
+  d.certifications = d.certifications.filter((c) => c.userId !== id);
+  d.assignments = d.assignments.filter((a) => a.userId !== id);
+  d.quizAttempts = d.quizAttempts.filter((a) => a.userId !== id);
+  d.practicalEvaluations = d.practicalEvaluations.filter((e) => e.userId !== id && e.evaluatorId !== id);
+  d.stepProgress = d.stepProgress.filter((p) => p.userId !== id);
+  d.groupMembers = d.groupMembers.filter((m) => m.userId !== id);
+  d.users = d.users.filter((u) => u.id !== id);
+  persist();
+  revalidatePath("/people");
+  redirect("/people");
+}
+
 // ---------------- Roles ----------------
 
 const roleSchema = z.object({
@@ -606,8 +732,10 @@ export async function createModule(formData: FormData) {
     changelog: templateKey ? `Started from the "${templateKey}" template.` : "",
     isDraft: true,
   });
-  for (const sec of SOP_SECTIONS) {
-    d.sopSections.push({ id: newId("sop"), moduleVersionId, sectionKey: sec.key, body: "" });
+  for (const topicTitle of STARTER_OUTLINE) {
+    const topicId = newId("topic");
+    d.topics.push({ id: topicId, moduleVersionId, title: topicTitle, sortOrder: d.topics.filter((t) => t.moduleVersionId === moduleVersionId).length + 1 });
+    d.steps.push({ id: newId("step"), topicId, title: "Overview", body: "", sortOrder: 1 });
   }
   persist();
   revalidatePath("/builder");

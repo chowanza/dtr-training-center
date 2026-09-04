@@ -40,7 +40,8 @@ export default async function NewModulePage({ searchParams }: { searchParams: Pr
           </select>
         </label>
         <p className="text-[12px] text-ink-3">
-          Creates a draft with the thirteen SOP sections ready to fill in. Nothing is published until it&apos;s complete.
+          Creates a draft with a starter outline of topics — edit, reorder, or delete any of them. Nothing is
+          published until every step has real content.
         </p>
         <button type="submit" className="btn-primary">
           Create Module

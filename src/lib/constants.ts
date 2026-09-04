@@ -1,36 +1,16 @@
-export const SOP_SECTIONS = [
-  { key: "purpose", label: "Purpose" },
-  { key: "when_to_use", label: "When to Use" },
-  { key: "person_responsible", label: "Person Responsible" },
-  { key: "response_deadline", label: "Response Deadline" },
-  { key: "information_required", label: "Information Required" },
-  { key: "steps", label: "Steps" },
-  { key: "scripts", label: "Scripts" },
-  { key: "decision_rules", label: "Decision Rules" },
-  { key: "documentation", label: "Documentation" },
-  { key: "checklist", label: "Checklist" },
-  { key: "common_mistakes", label: "Common Mistakes" },
-  { key: "escalation", label: "Escalation" },
-  { key: "training_video", label: "Training Video" },
+/** Starter outline dropped into every new module — a head start, not a requirement. */
+export const STARTER_OUTLINE = [
+  "Purpose & When to Use",
+  "Step-by-Step Process",
+  "Decision Rules & Escalation",
+  "Documentation & Common Mistakes",
 ] as const;
 
-export type SopSectionKey = (typeof SOP_SECTIONS)[number]["key"];
-
-export const SECTION_GUIDANCE: Record<SopSectionKey, string> = {
-  purpose: "Why does this process exist? What problem does it solve for the customer or the business?",
-  when_to_use: "What triggers this — a phone call, a form, a specific job status? Be concrete.",
-  person_responsible: "Which role owns this end to end? Name the role, not the person.",
-  response_deadline: "What's the time window? \"As soon as possible\" is not a deadline.",
-  information_required: "What has to be collected before this can move forward?",
-  steps: "Numbered steps, in the order they actually happen. This becomes the checklist.",
-  scripts: "Point to the scripts below — don't restate them here.",
-  decision_rules: "The branches: if X, do Y. This is where most training gaps hide.",
-  documentation: "Where does this get logged, and how fast? Undocumented work didn't happen.",
-  checklist: "Point to the checklist below.",
-  common_mistakes: "What does a new hire usually get wrong here? Be specific, not generic.",
-  escalation: "When does this go to a manager, and how?",
-  training_video: "What should the video(s) cover, and roughly how long?",
-};
+export const EMBED_KINDS = [
+  { key: "video", label: "Video" },
+  { key: "image", label: "Image" },
+  { key: "link", label: "Link" },
+] as const;
 
 export const TEMPLATES = [
   {

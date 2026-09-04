@@ -26,7 +26,7 @@ export default async function BuilderIndexPage({ searchParams }: { searchParams:
         <div>
           <h1 className="font-[var(--font-display)] font-bold text-[26px] tracking-tight mb-1">Content</h1>
           <p className="text-ink-2 text-[14.5px]">
-            Thirteen fixed SOP sections per module, a completeness meter, and an explicit publish step.
+            Topics, steps, and per-topic knowledge checks — a completeness meter, and an explicit publish step.
           </p>
         </div>
         {canAuthor && (

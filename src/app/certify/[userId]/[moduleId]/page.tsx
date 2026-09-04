@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
 import { RUBRIC_DIMENSIONS } from "@/lib/constants";
+import { quizzesForModuleVersion, topicsForModuleVersion } from "@/lib/derive";
 import { StatusPill } from "@/components/StatusPill";
 import { submitPracticalEvaluation, certifyUser } from "@/lib/actions";
 
@@ -17,10 +18,13 @@ export default async function EvaluatePage({ params }: { params: Promise<{ userI
   const mv = db.moduleVersions.find((v) => v.moduleId === moduleId)!;
   const scenario = db.practicalScenarios.find((s) => s.moduleVersionId === mv.id);
   const cert = db.certifications.find((c) => c.userId === userId && c.moduleId === moduleId);
-  const quiz = db.quizzes.find((q) => q.moduleVersionId === mv.id);
-  const lastAttempt = quiz
-    ? db.quizAttempts.filter((a) => a.userId === userId && a.quizId === quiz.id).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0]
-    : undefined;
+  const topics = topicsForModuleVersion(mv.id);
+  const quizAttemptSummaries = quizzesForModuleVersion(mv.id)
+    .filter((q) => db.quizQuestions.some((qq) => qq.quizId === q.id))
+    .map((q) => {
+      const lastAttempt = db.quizAttempts.filter((a) => a.userId === userId && a.quizId === q.id).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0];
+      return { topicTitle: topics.find((t) => t.id === q.topicId)?.title ?? "Knowledge check", lastAttempt };
+    });
   const evaluations = scenario
     ? db.practicalEvaluations.filter((e) => e.userId === userId && e.scenarioId === scenario.id).sort((a, b) => b.evaluatedAt.localeCompare(a.evaluatedAt))
     : [];
@@ -41,10 +45,21 @@ export default async function EvaluatePage({ params }: { params: Promise<{ userI
         {cert && <StatusPill status={cert.status} />}
       </div>
 
-      {lastAttempt && (
-        <div className="border border-rule rounded bg-surface p-4 mb-6 text-sm">
-          <span className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-wider text-ink-3 block mb-1">Latest quiz attempt</span>
-          Scored <strong>{lastAttempt.score}%</strong> — {lastAttempt.passed ? "passed" : "did not pass"}.
+      {quizAttemptSummaries.length > 0 && (
+        <div className="border border-rule rounded bg-surface p-4 mb-6 text-sm space-y-1.5">
+          <span className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-wider text-ink-3 block mb-1">Knowledge checks</span>
+          {quizAttemptSummaries.map(({ topicTitle, lastAttempt }, i) => (
+            <p key={i}>
+              <strong>{topicTitle}</strong>:{" "}
+              {lastAttempt ? (
+                <>
+                  scored <strong>{lastAttempt.score}%</strong> — {lastAttempt.passed ? "passed" : "did not pass"}
+                </>
+              ) : (
+                <span className="text-ink-3">not attempted</span>
+              )}
+            </p>
+          ))}
         </div>
       )}
 

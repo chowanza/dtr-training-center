@@ -1,4 +1,4 @@
-import type { CertStatus, RubricKey, ScriptType, SopSectionKey } from "./constants";
+import type { CertStatus, RubricKey, ScriptType } from "./constants";
 
 export interface Role {
   id: string;
@@ -73,11 +73,29 @@ export interface ModuleVersion {
   isDraft: boolean;
 }
 
-export interface SopSection {
+export interface Topic {
   id: string;
   moduleVersionId: string;
-  sectionKey: SopSectionKey;
+  title: string;
+  sortOrder: number;
+}
+
+export type EmbedKind = "video" | "image" | "link";
+
+export interface StepEmbed {
+  id: string;
+  stepId: string;
+  kind: EmbedKind;
+  url: string;
+  label: string;
+}
+
+export interface Step {
+  id: string;
+  topicId: string;
+  title: string;
   body: string;
+  sortOrder: number;
 }
 
 export interface Script {
@@ -85,15 +103,6 @@ export interface Script {
   moduleVersionId: string;
   type: ScriptType;
   body: string;
-}
-
-export interface Video {
-  id: string;
-  moduleVersionId: string;
-  title: string;
-  url: string;
-  durationS: number;
-  sortOrder: number;
 }
 
 export interface ChecklistItem {
@@ -106,7 +115,7 @@ export interface ChecklistItem {
 
 export interface Quiz {
   id: string;
-  moduleVersionId: string;
+  topicId: string;
   passingScore: number;
 }
 
@@ -136,6 +145,13 @@ export interface QuizAttempt {
   answers: Record<string, string>; // questionId -> optionId
   startedAt: string;
   submittedAt: string;
+}
+
+export interface StepProgress {
+  id: string;
+  userId: string;
+  stepId: string;
+  completedAt: string;
 }
 
 export interface PracticalScenario {
@@ -197,9 +213,11 @@ export interface Database {
   roleModuleRequirements: RoleModuleRequirement[];
   modules: Module[];
   moduleVersions: ModuleVersion[];
-  sopSections: SopSection[];
+  topics: Topic[];
+  steps: Step[];
+  stepEmbeds: StepEmbed[];
+  stepProgress: StepProgress[];
   scripts: Script[];
-  videos: Video[];
   checklistItems: ChecklistItem[];
   quizzes: Quiz[];
   quizQuestions: QuizQuestion[];

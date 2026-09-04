@@ -62,20 +62,25 @@ export function createSeedDatabase(): Database {
     isDraft: false,
   };
 
-  const sopSections1: Database["sopSections"] = [
-    { id: "sop-1-purpose", moduleVersionId: mv1.id, sectionKey: "purpose", body: "Ensure every inbound roofing lead is captured, qualified, and scheduled within our response window so we don't lose jobs to slower competitors." },
-    { id: "sop-1-when", moduleVersionId: mv1.id, sectionKey: "when_to_use", body: "Any time a new lead arrives — phone call, web form, Angi/HomeAdvisor, referral, or a missed-call callback." },
-    { id: "sop-1-who", moduleVersionId: mv1.id, sectionKey: "person_responsible", body: "The CSR on lead-response duty for that shift." },
-    { id: "sop-1-deadline", moduleVersionId: mv1.id, sectionKey: "response_deadline", body: "Call or text back within 5 minutes during business hours. Within 30 minutes outside business hours. Every lead gets a first-touch attempt the same day it arrives, no exceptions." },
-    { id: "sop-1-info", moduleVersionId: mv1.id, sectionKey: "information_required", body: "Full name, callback phone number, service address, issue type (leak, storm damage, full replacement, inspection), whether insurance is involved, and preferred appointment window." },
-    { id: "sop-1-steps", moduleVersionId: mv1.id, sectionKey: "steps", body: "1. Answer within 3 rings using the phone greeting script.\n2. Confirm name, phone, and service address — read the address back to the customer.\n3. Ask the qualifying questions: issue type, insurance involved, urgency.\n4. Offer the earliest available appointment window that matches urgency.\n5. Confirm the appointment out loud and send the confirmation text immediately.\n6. Log the lead in Workiz before moving to the next call, tagged with source and issue type." },
-    { id: "sop-1-scripts", moduleVersionId: mv1.id, sectionKey: "scripts", body: "Use the phone, text, voicemail, confirmation, and escalation scripts attached to this module. Do not improvise the opening line — customers judge us in the first 10 seconds." },
-    { id: "sop-1-decisions", moduleVersionId: mv1.id, sectionKey: "decision_rules", body: "If there is an active interior leak or safety hazard → treat as same-day emergency, escalate to dispatch immediately.\nIf insurance is involved → flag the lead \"Insurance\" in Workiz and note the carrier if known.\nIf the caller asks a pricing question you can't answer → use the \"I don't know\" script, never guess a number.\nIf the caller is upset or asks for a manager by name → use the escalation script and loop in Luis." },
-    { id: "sop-1-docs", moduleVersionId: mv1.id, sectionKey: "documentation", body: "Log every lead in Workiz within 2 minutes of the call ending. Tag lead source and issue type. A lead does not exist until it exists in Workiz — verbal notes and sticky notes do not count." },
-    { id: "sop-1-checklist", moduleVersionId: mv1.id, sectionKey: "checklist", body: "Run the New Lead Handling checklist on every call before moving to the next one. See the attached checklist for this module." },
-    { id: "sop-1-mistakes", moduleVersionId: mv1.id, sectionKey: "common_mistakes", body: "Booking an appointment without confirming the address.\nForgetting to send the confirmation text.\nGuessing at pricing instead of using the \"I don't know\" script.\nLetting a lead sit in a notepad instead of logging it in Workiz right away." },
-    { id: "sop-1-escalation", moduleVersionId: mv1.id, sectionKey: "escalation", body: "Escalate to the Office Manager (Luis) immediately if: the customer is hostile, there is an active interior leak or safety issue, or the customer explicitly asks for a manager. Use the escalation script and tag the Workiz record \"Needs Manager.\"" },
-    { id: "sop-1-video", moduleVersionId: mv1.id, sectionKey: "training_video", body: "Three-part series: (1) Answering the phone — 4 min. (2) Qualifying the lead — 6 min. (3) Booking and logging in Workiz — 5 min." },
+  const topics1: Database["topics"] = [
+    { id: "topic-1-a", moduleVersionId: mv1.id, title: "Purpose & When to Use", sortOrder: 1 },
+    { id: "topic-1-b", moduleVersionId: mv1.id, title: "Handling the Call", sortOrder: 2 },
+    { id: "topic-1-c", moduleVersionId: mv1.id, title: "Documentation & Quality", sortOrder: 3 },
+    { id: "topic-1-d", moduleVersionId: mv1.id, title: "Escalation", sortOrder: 4 },
+    { id: "topic-1-e", moduleVersionId: mv1.id, title: "Training Video", sortOrder: 5 },
+  ];
+
+  const steps1: Database["steps"] = [
+    { id: "step-1-a1", topicId: "topic-1-a", title: "Purpose", sortOrder: 1, body: "Ensure every inbound roofing lead is captured, qualified, and scheduled within our response window so we don't lose jobs to slower competitors." },
+    { id: "step-1-a2", topicId: "topic-1-a", title: "When to Use", sortOrder: 2, body: "Any time a new lead arrives — phone call, web form, Angi/HomeAdvisor, referral, or a missed-call callback." },
+    { id: "step-1-b1", topicId: "topic-1-b", title: "Who's Responsible, and By When", sortOrder: 1, body: "The CSR on lead-response duty for that shift. Call or text back within 5 minutes during business hours, within 30 minutes outside business hours. Every lead gets a first-touch attempt the same day it arrives, no exceptions." },
+    { id: "step-1-b2", topicId: "topic-1-b", title: "Information to Collect", sortOrder: 2, body: "Full name, callback phone number, service address, issue type (leak, storm damage, full replacement, inspection), whether insurance is involved, and preferred appointment window." },
+    { id: "step-1-b3", topicId: "topic-1-b", title: "Step-by-Step", sortOrder: 3, body: "1. Answer within 3 rings using the phone greeting script.\n2. Confirm name, phone, and service address — read the address back to the customer.\n3. Ask the qualifying questions: issue type, insurance involved, urgency.\n4. Offer the earliest available appointment window that matches urgency.\n5. Confirm the appointment out loud and send the confirmation text immediately.\n6. Log the lead in Workiz before moving to the next call, tagged with source and issue type.\n\nUse the phone, text, voicemail, confirmation, and escalation scripts attached to this module — don't improvise the opening line, customers judge us in the first 10 seconds." },
+    { id: "step-1-b4", topicId: "topic-1-b", title: "Decision Rules", sortOrder: 4, body: "If there is an active interior leak or safety hazard → treat as same-day emergency, escalate to dispatch immediately.\nIf insurance is involved → flag the lead \"Insurance\" in Workiz and note the carrier if known.\nIf the caller asks a pricing question you can't answer → use the \"I don't know\" script, never guess a number.\nIf the caller is upset or asks for a manager by name → use the escalation script and loop in Luis." },
+    { id: "step-1-c1", topicId: "topic-1-c", title: "Documentation", sortOrder: 1, body: "Log every lead in Workiz within 2 minutes of the call ending. Tag lead source and issue type. A lead does not exist until it exists in Workiz — verbal notes and sticky notes do not count. Run the checklist attached to this module on every call." },
+    { id: "step-1-c2", topicId: "topic-1-c", title: "Common Mistakes", sortOrder: 2, body: "Booking an appointment without confirming the address.\nForgetting to send the confirmation text.\nGuessing at pricing instead of using the \"I don't know\" script.\nLetting a lead sit in a notepad instead of logging it in Workiz right away." },
+    { id: "step-1-d1", topicId: "topic-1-d", title: "When to Escalate", sortOrder: 1, body: "Escalate to the Office Manager (Luis) immediately if: the customer is hostile, there is an active interior leak or safety issue, or the customer explicitly asks for a manager. Use the escalation script and tag the Workiz record \"Needs Manager.\"" },
+    { id: "step-1-e1", topicId: "topic-1-e", title: "Video Overview", sortOrder: 1, body: "Three-part series: (1) Answering the phone — 4 min. (2) Qualifying the lead — 6 min. (3) Booking and logging in Workiz — 5 min. Add the recordings below once they're ready." },
   ];
 
   const scripts1: Database["scripts"] = [
@@ -98,7 +103,7 @@ export function createSeedDatabase(): Database {
     { id: "chk-1-8", moduleVersionId: mv1.id, text: "Noted any special access instructions (gate code, pets, etc.)", sortOrder: 8, isRequired: false },
   ];
 
-  const quiz1: Database["quizzes"][number] = { id: "quiz-1", moduleVersionId: mv1.id, passingScore: 90 };
+  const quiz1: Database["quizzes"][number] = { id: "quiz-1", topicId: "topic-1-b", passingScore: 90 };
 
   const q = (id: string, prompt: string, options: { text: string; correct?: boolean; explanation: string }[], sortOrder: number): Database["quizQuestions"][number] => ({
     id,
@@ -179,13 +184,6 @@ export function createSeedDatabase(): Database {
     changelog: "",
     isDraft: true,
   }));
-  const shellSections: Database["sopSections"] = shellVersions.flatMap((mv) =>
-    ([
-      "purpose", "when_to_use", "person_responsible", "response_deadline", "information_required",
-      "steps", "scripts", "decision_rules", "documentation", "checklist", "common_mistakes", "escalation", "training_video",
-    ] as const).map((key) => ({ id: `sop-${mv.id}-${key}`, moduleVersionId: mv.id, sectionKey: key, body: "" }))
-  );
-
   const allModules = [mod1, ...shellModules];
   const roleModuleRequirements: Database["roleModuleRequirements"] = allModules.map((m, i) => ({
     id: `rmr-${m.id}`,
@@ -299,9 +297,11 @@ export function createSeedDatabase(): Database {
     roleModuleRequirements,
     modules: allModules,
     moduleVersions: [mv1, ...shellVersions],
-    sopSections: [...sopSections1, ...shellSections],
+    topics: topics1,
+    steps: steps1,
+    stepEmbeds: [],
+    stepProgress: [],
     scripts: scripts1,
-    videos: [],
     checklistItems: checklist1,
     quizzes: [quiz1],
     quizQuestions: quizQuestions1,

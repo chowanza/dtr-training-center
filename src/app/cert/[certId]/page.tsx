@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getDb } from "@/lib/db";
 import { StatusPill } from "@/components/StatusPill";
 import { CERT_STATUS_LABEL, type CertStatus } from "@/lib/constants";
+import { quizzesForModuleVersion, topicsForModuleVersion } from "@/lib/derive";
 
 export default async function CertRecordPage({ params }: { params: Promise<{ certId: string }> }) {
   const { certId } = await params;
@@ -12,9 +13,15 @@ export default async function CertRecordPage({ params }: { params: Promise<{ cer
   const mod = db.modules.find((m) => m.id === cert.moduleId)!;
   const certifier = cert.certifiedBy ? db.users.find((u) => u.id === cert.certifiedBy) : undefined;
   const mv = db.moduleVersions.find((v) => v.moduleId === cert.moduleId)!;
-  const quiz = db.quizzes.find((q) => q.moduleVersionId === mv.id);
-  const attempts = quiz ? db.quizAttempts.filter((a) => a.userId === cert.userId && a.quizId === quiz.id) : [];
-  const bestAttempt = attempts.sort((a, b) => b.score - a.score)[0];
+  const topics = topicsForModuleVersion(mv.id);
+  const quizResults = quizzesForModuleVersion(mv.id)
+    .map((quiz) => {
+      const questions = db.quizQuestions.filter((q) => q.quizId === quiz.id);
+      const attempts = db.quizAttempts.filter((a) => a.userId === cert.userId && a.quizId === quiz.id);
+      const bestAttempt = [...attempts].sort((a, b) => b.score - a.score)[0];
+      return { quiz, questions, bestAttempt, topicTitle: topics.find((t) => t.id === quiz.topicId)?.title ?? "Knowledge check" };
+    })
+    .filter((r) => r.questions.length > 0);
   const scenario = db.practicalScenarios.find((s) => s.moduleVersionId === mv.id);
   const evaluations = scenario ? db.practicalEvaluations.filter((e) => e.userId === cert.userId && e.scenarioId === scenario.id) : [];
   const bestEval = evaluations.find((e) => e.result === "pass") ?? evaluations[0];
@@ -36,22 +43,37 @@ export default async function CertRecordPage({ params }: { params: Promise<{ cer
         </dl>
       </div>
 
-      {bestAttempt && (
-        <Block title="Quiz score">
-          <p className="text-sm mb-2">
-            <strong>{bestAttempt.score}%</strong> on {new Date(bestAttempt.submittedAt).toLocaleDateString()}
-          </p>
-          <ul className="space-y-1 text-sm">
-            {(quiz ? db.quizQuestions.filter((q) => q.quizId === quiz.id) : []).map((q) => {
-              const chosenId = bestAttempt.answers[q.id];
-              const chosen = q.options.find((o) => o.id === chosenId);
-              return (
-                <li key={q.id} className={chosen?.isCorrect ? "text-ink-2" : "text-brick"}>
-                  {chosen?.isCorrect ? "✓" : "✗"} {q.prompt}
-                </li>
-              );
-            })}
-          </ul>
+      {quizResults.length > 0 && (
+        <Block title="Knowledge checks">
+          <div className="space-y-4">
+            {quizResults.map(({ quiz, questions, bestAttempt, topicTitle }) => (
+              <div key={quiz.id}>
+                <p className="text-sm mb-1.5">
+                  <strong>{topicTitle}</strong> —{" "}
+                  {bestAttempt ? (
+                    <>
+                      <strong>{bestAttempt.score}%</strong> on {new Date(bestAttempt.submittedAt).toLocaleDateString()}
+                    </>
+                  ) : (
+                    <span className="text-ink-3">not attempted</span>
+                  )}
+                </p>
+                {bestAttempt && (
+                  <ul className="space-y-1 text-sm">
+                    {questions.map((q) => {
+                      const chosenId = bestAttempt.answers[q.id];
+                      const chosen = q.options.find((o) => o.id === chosenId);
+                      return (
+                        <li key={q.id} className={chosen?.isCorrect ? "text-ink-2" : "text-brick"}>
+                          {chosen?.isCorrect ? "✓" : "✗"} {q.prompt}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
         </Block>
       )}
 
