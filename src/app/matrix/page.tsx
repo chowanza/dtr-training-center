@@ -11,11 +11,15 @@ export default async function MatrixPage() {
 
   return (
     <div>
-      <PageHead
-        eyebrow="Training Matrix"
-        title="Everyone, against everything"
-        desc="People down the side, modules across the top. This is the screen that turns this from Luis's project into the company's system."
-      />
+      <Link href="/people" className="text-xs font-[var(--font-mono)] text-ink-3 hover:text-navy">
+        ← People
+      </Link>
+      <div className="mt-3">
+        <PageHead
+          title="Everyone, against everything"
+          desc="People down the side, modules across the top. This is the screen that turns this from Luis's project into the company's system."
+        />
+      </div>
 
       <div className="border border-rule rounded-md bg-surface overflow-x-auto">
         <table className="w-full text-sm border-collapse min-w-[720px]">

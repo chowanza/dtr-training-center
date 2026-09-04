@@ -27,7 +27,7 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
   if (mod.status !== "published") {
     return (
       <div>
-        <Link href="/learn" className="text-xs font-[var(--font-mono)] text-ink-3 hover:text-copper">
+        <Link href="/?view=training" className="text-xs font-[var(--font-mono)] text-ink-3 hover:text-navy">
           ← My training
         </Link>
         <p className="mt-6 text-ink-2">This module hasn&apos;t been published yet — check back soon.</p>
@@ -37,7 +37,7 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
 
   return (
     <div className="max-w-2xl mx-auto sm:mx-0">
-      <Link href="/learn" className="text-xs font-[var(--font-mono)] text-ink-3 hover:text-copper">
+      <Link href="/?view=training" className="text-xs font-[var(--font-mono)] text-ink-3 hover:text-navy">
         ← My training
       </Link>
 

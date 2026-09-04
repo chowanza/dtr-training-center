@@ -20,7 +20,6 @@ export default async function CertifyIndexPage() {
   return (
     <div>
       <PageHead
-        eyebrow="Evaluation & Certification"
         title="Score the practical, then certify"
         desc="Passing the quiz is a score. Certifying is a human judgment — the two are deliberately kept separate."
       />

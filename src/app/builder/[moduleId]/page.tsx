@@ -33,7 +33,7 @@ export default async function ModuleEditorPage({ params }: { params: Promise<{ m
 
   return (
     <div>
-      <Link href="/builder" className="text-xs font-[var(--font-mono)] text-ink-3 hover:text-copper">
+      <Link href="/builder" className="text-xs font-[var(--font-mono)] text-ink-3 hover:text-navy">
         ← All modules
       </Link>
 

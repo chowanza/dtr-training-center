@@ -1,9 +1,8 @@
-export function PageHead({ eyebrow, title, desc }: { eyebrow: string; title: string; desc: string }) {
+export function PageHead({ title, desc }: { title: string; desc: string }) {
   return (
-    <div className="mb-8">
-      <p className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.14em] text-copper mb-2">{eyebrow}</p>
-      <h1 className="font-[var(--font-display)] font-bold text-3xl tracking-tight mb-2">{title}</h1>
-      <p className="text-ink-2 max-w-2xl text-[15px]">{desc}</p>
+    <div className="mb-6">
+      <h1 className="font-[var(--font-display)] font-bold text-[26px] tracking-tight mb-1">{title}</h1>
+      <p className="text-ink-2 max-w-2xl text-[14.5px]">{desc}</p>
     </div>
   );
 }

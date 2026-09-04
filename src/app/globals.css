@@ -1,24 +1,31 @@
 @import "tailwindcss";
 
 :root {
-  --paper: #f5f2ee;
+  --paper: #f3f6fb;
   --surface: #ffffff;
-  --surface-2: #ede8e2;
-  --ink: #2a2421;
-  --ink-2: #5c534c;
-  --ink-3: #8a7f76;
-  --rule: #ddd5cc;
-  --rule-2: #c8bdb1;
-  --copper: #9e5723;
-  --copper-soft: #f0e0d2;
-  --patina: #26705f;
-  --patina-soft: #dcebe6;
-  --amber: #8a6410;
-  --amber-soft: #f4e8cc;
-  --brick: #9a3427;
-  --brick-soft: #f5ddd8;
-  --indigo: #42548a;
-  --indigo-soft: #dfe4f2;
+  --surface-2: #edf1f7;
+  --ink: #16233d;
+  --ink-2: #51607a;
+  --ink-3: #8894a8;
+  --rule: #e1e7f0;
+  --rule-2: #cbd5e3;
+
+  /* Dream Team Roofing brand */
+  --navy: #1f3f78;
+  --navy-deep: #0f2554;
+  --navy-soft: #e7edf7;
+  --copper: #f97e27; /* CTA orange */
+  --copper-soft: #fde7d3;
+  --copper-deep: #bc5105;
+
+  --patina: #12946b; /* success / certified */
+  --patina-soft: #dcf3ea;
+  --amber: #c77a11; /* in progress */
+  --amber-soft: #fbebd2;
+  --brick: #d33b2c; /* failed / expired */
+  --brick-soft: #fbe1dd;
+  --indigo: #2e5aa8; /* ready / info */
+  --indigo-soft: #e1e9f7;
 }
 
 @theme inline {
@@ -30,8 +37,12 @@
   --color-ink-3: var(--ink-3);
   --color-rule: var(--rule);
   --color-rule-2: var(--rule-2);
+  --color-navy: var(--navy);
+  --color-navy-deep: var(--navy-deep);
+  --color-navy-soft: var(--navy-soft);
   --color-copper: var(--copper);
   --color-copper-soft: var(--copper-soft);
+  --color-copper-deep: var(--copper-deep);
   --color-patina: var(--patina);
   --color-patina-soft: var(--patina-soft);
   --color-amber: var(--amber);
@@ -40,31 +51,37 @@
   --color-brick-soft: var(--brick-soft);
   --color-indigo: var(--indigo);
   --color-indigo-soft: var(--indigo-soft);
-  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
-  --font-body: "IBM Plex Sans", "Segoe UI", Roboto, sans-serif;
+  --font-display: "Poppins", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Inter", "Segoe UI", Roboto, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #17140f;
-    --surface: #201c17;
-    --surface-2: #2a251f;
-    --ink: #efe9e1;
-    --ink-2: #b8ac9f;
-    --ink-3: #8a7d6f;
-    --rule: #352f27;
-    --rule-2: #4a4238;
-    --copper: #d98b4e;
-    --copper-soft: #3a2718;
-    --patina: #57bfa4;
-    --patina-soft: #16332c;
-    --amber: #d3a63c;
-    --amber-soft: #332810;
-    --brick: #d97565;
-    --brick-soft: #361c17;
-    --indigo: #8fa2dc;
-    --indigo-soft: #1d2338;
+    --paper: #0b1526;
+    --surface: #121d33;
+    --surface-2: #182642;
+    --ink: #e7ecf5;
+    --ink-2: #a9b6cc;
+    --ink-3: #74839c;
+    --rule: #223256;
+    --rule-2: #304472;
+
+    --navy: #4d76c2;
+    --navy-deep: #16294d;
+    --navy-soft: #1b2a48;
+    --copper: #ff9152;
+    --copper-soft: #402410;
+    --copper-deep: #ffb27c;
+
+    --patina: #34d399;
+    --patina-soft: #123227;
+    --amber: #e3a63c;
+    --amber-soft: #3a2b10;
+    --brick: #f0685a;
+    --brick-soft: #3b1712;
+    --indigo: #7fa3e8;
+    --indigo-soft: #16253f;
   }
 }
 
@@ -94,30 +111,44 @@ body {
 .p-indigo { background: var(--indigo-soft); border-color: var(--indigo); color: var(--indigo); }
 .p-good { background: var(--patina-soft); border-color: var(--patina); color: var(--patina); }
 .p-bad { background: var(--brick-soft); border-color: var(--brick); color: var(--brick); }
-.p-cert { background: var(--patina); border-color: var(--patina); color: var(--paper); }
+.p-cert { background: var(--patina); border-color: var(--patina); color: #ffffff; }
 
 .btn-primary {
   display: inline-block;
   font-size: 13.5px;
   font-weight: 600;
   padding: 9px 18px;
-  border-radius: 4px;
-  background: var(--ink);
-  color: var(--paper);
-  border: 1px solid var(--ink);
-  transition: opacity .15s;
+  border-radius: 6px;
+  background: var(--copper);
+  color: #ffffff;
+  border: 1px solid var(--copper);
+  transition: background-color .15s;
 }
-.btn-primary:hover:not(:disabled) { opacity: .85; }
+.btn-primary:hover:not(:disabled) { background: var(--copper-deep); border-color: var(--copper-deep); }
 
 .btn-secondary {
   display: inline-block;
   font-size: 13px;
   font-weight: 500;
   padding: 7px 14px;
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--rule-2);
   transition: border-color .15s, color .15s;
 }
-.btn-secondary:hover:not(:disabled) { border-color: var(--copper); color: var(--copper); }
+.btn-secondary:hover:not(:disabled) { border-color: var(--navy); color: var(--navy); }
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 9px 12px;
+  border-radius: 8px;
+  color: var(--ink-2);
+  transition: background-color .15s, color .15s;
+}
+.sidebar-link:hover { background: var(--surface-2); color: var(--ink); }
+.sidebar-link.active { background: var(--navy-soft); color: var(--navy); font-weight: 600; }

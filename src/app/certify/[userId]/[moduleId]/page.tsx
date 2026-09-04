@@ -26,7 +26,7 @@ export default async function EvaluatePage({ params }: { params: Promise<{ userI
 
   return (
     <div className="max-w-2xl">
-      <Link href="/certify" className="text-xs font-[var(--font-mono)] text-ink-3 hover:text-copper">
+      <Link href="/certify" className="text-xs font-[var(--font-mono)] text-ink-3 hover:text-navy">
         ← Evaluation & Certification
       </Link>
 
