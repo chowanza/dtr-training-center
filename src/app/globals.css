@@ -1,22 +1,22 @@
 @import "tailwindcss";
 
 :root {
-  --paper: #f3f6fb;
+  --paper: #ffffff;
   --surface: #ffffff;
-  --surface-2: #edf1f7;
+  --surface-2: #f5f7fa;
   --ink: #16233d;
   --ink-2: #51607a;
   --ink-3: #8894a8;
-  --rule: #e1e7f0;
-  --rule-2: #cbd5e3;
+  --rule: #e6e9ef;
+  --rule-2: #d2d7e0;
 
-  /* Dream Team Roofing brand */
-  --navy: #1f3f78;
-  --navy-deep: #0f2554;
-  --navy-soft: #e7edf7;
-  --copper: #f97e27; /* CTA orange */
-  --copper-soft: #fde7d3;
-  --copper-deep: #bc5105;
+  /* Dream Team Roofing brand — sampled from the logo */
+  --navy: #1c2c4d;
+  --navy-deep: #0e1830;
+  --navy-soft: #e9edf5;
+  --copper: #f0b020; /* gold */
+  --copper-soft: #fdf1d6;
+  --copper-deep: #cc900e;
 
   --patina: #12946b; /* success / certified */
   --patina-soft: #dcf3ea;
@@ -56,33 +56,33 @@
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #0b1526;
-    --surface: #121d33;
-    --surface-2: #182642;
-    --ink: #e7ecf5;
-    --ink-2: #a9b6cc;
-    --ink-3: #74839c;
-    --rule: #223256;
-    --rule-2: #304472;
+/* The brand is white-background by design — dark mode only kicks in if a
+   future toggle explicitly sets data-theme="dark"; it never follows the OS. */
+:root[data-theme="dark"] {
+  --paper: #0b1526;
+  --surface: #121d33;
+  --surface-2: #182642;
+  --ink: #e7ecf5;
+  --ink-2: #a9b6cc;
+  --ink-3: #74839c;
+  --rule: #223256;
+  --rule-2: #304472;
 
-    --navy: #4d76c2;
-    --navy-deep: #16294d;
-    --navy-soft: #1b2a48;
-    --copper: #ff9152;
-    --copper-soft: #402410;
-    --copper-deep: #ffb27c;
+  --navy: #4d76c2;
+  --navy-deep: #16294d;
+  --navy-soft: #1b2a48;
+  --copper: #f6c752;
+  --copper-soft: #3a2d10;
+  --copper-deep: #ffd873;
 
-    --patina: #34d399;
-    --patina-soft: #123227;
-    --amber: #e3a63c;
-    --amber-soft: #3a2b10;
-    --brick: #f0685a;
-    --brick-soft: #3b1712;
-    --indigo: #7fa3e8;
-    --indigo-soft: #16253f;
-  }
+  --patina: #34d399;
+  --patina-soft: #123227;
+  --amber: #e3a63c;
+  --amber-soft: #3a2b10;
+  --brick: #f0685a;
+  --brick-soft: #3b1712;
+  --indigo: #7fa3e8;
+  --indigo-soft: #16253f;
 }
 
 * {
@@ -120,11 +120,11 @@ body {
   padding: 9px 18px;
   border-radius: 6px;
   background: var(--copper);
-  color: #ffffff;
-  border: 1px solid var(--copper);
+  color: var(--navy-deep);
+  border: 1px solid var(--copper-deep);
   transition: background-color .15s;
 }
-.btn-primary:hover:not(:disabled) { background: var(--copper-deep); border-color: var(--copper-deep); }
+.btn-primary:hover:not(:disabled) { background: var(--copper-deep); color: #ffffff; }
 
 .btn-secondary {
   display: inline-block;
