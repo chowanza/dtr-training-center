@@ -12,7 +12,11 @@ declare global {
 function loadFromDisk(): Database {
   if (fs.existsSync(DB_PATH)) {
     try {
-      return JSON.parse(fs.readFileSync(DB_PATH, "utf-8")) as Database;
+      const data = JSON.parse(fs.readFileSync(DB_PATH, "utf-8")) as Database;
+      if (!data.contentBlocks) data.contentBlocks = [];
+      if (!data.aiRoleplayScenarios) data.aiRoleplayScenarios = [];
+      if (!data.aiRoleplaySessions) data.aiRoleplaySessions = [];
+      return data;
     } catch {
       // fall through to reseed on parse failure
     }

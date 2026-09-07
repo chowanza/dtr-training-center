@@ -22,10 +22,29 @@ export function quizzesForModuleVersion(moduleVersionId: string) {
   return d.quizzes.filter((q) => topicIds.has(q.topicId));
 }
 
+export function contentBlocksForStep(stepId: string) {
+  const d = getDb();
+  return (d.contentBlocks || []).filter((b) => b.stepId === stepId).sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+export function aiScenariosForModuleVersion(moduleVersionId: string) {
+  const d = getDb();
+  return (d.aiRoleplayScenarios || []).filter((s) => s.moduleVersionId === moduleVersionId);
+}
+
+export function aiSessionForUserAndScenario(userId: string, scenarioId: string) {
+  const d = getDb();
+  return (d.aiRoleplaySessions || []).find((s) => s.userId === userId && s.scenarioId === scenarioId);
+}
+
 export function moduleCompleteness(moduleVersionId: string) {
   const d = getDb();
   const steps = orderedSteps(moduleVersionId);
-  const filled = steps.filter((s) => s.body.trim().length > 0).length;
+  const filled = steps.filter((s) => {
+    const hasBody = s.body.trim().length > 0;
+    const hasBlocks = (d.contentBlocks || []).some((b) => b.stepId === s.id);
+    return hasBody || hasBlocks;
+  }).length;
   const quizzes = quizzesForModuleVersion(moduleVersionId);
   const questionCount = quizzes.reduce((n, q) => n + d.quizQuestions.filter((qq) => qq.quizId === q.id).length, 0);
   const checklistCount = d.checklistItems.filter((c) => c.moduleVersionId === moduleVersionId).length;

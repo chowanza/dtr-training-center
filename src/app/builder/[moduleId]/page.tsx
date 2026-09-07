@@ -22,6 +22,9 @@ import {
   updateScenario,
   publishModule,
 } from "@/lib/actions";
+import { BlockEditor } from "@/components/builder/BlockEditor";
+import { AiScenarioEditor } from "@/components/builder/AiScenarioEditor";
+import { Eye } from "lucide-react";
 
 export default async function ModuleEditorPage({ params }: { params: Promise<{ moduleId: string }> }) {
   const { moduleId } = await params;
@@ -53,6 +56,15 @@ export default async function ModuleEditorPage({ params }: { params: Promise<{ m
             <span>
               {completeness.filled}/{completeness.total} steps written · {completeness.pct}% complete
             </span>
+          </div>
+          <div className="mt-3">
+            <Link
+              href={`/learn/${moduleId}`}
+              className="btn-secondary text-xs inline-flex items-center gap-1.5"
+            >
+              <Eye size={13} />
+              Preview as Learner
+            </Link>
           </div>
         </div>
         <PublishPanel moduleId={moduleId} publishable={completeness.publishable} wasPublished={mod.status === "published"} />
@@ -162,7 +174,14 @@ export default async function ModuleEditorPage({ params }: { params: Promise<{ m
                           </button>
                         </form>
 
-                        <form action={deleteStep} className="mt-2">
+                        {/* Rich Multimedia Blocks Editor */}
+                        <BlockEditor
+                          stepId={step.id}
+                          moduleId={moduleId}
+                          blocks={(db.contentBlocks || []).filter((b) => b.stepId === step.id)}
+                        />
+
+                        <form action={deleteStep} className="mt-3 pt-2 border-t border-rule/60 flex justify-end">
                           <input type="hidden" name="id" value={step.id} />
                           <input type="hidden" name="moduleId" value={moduleId} />
                           <button className="text-[11px] text-brick hover:underline">Delete step</button>
@@ -312,6 +331,14 @@ export default async function ModuleEditorPage({ params }: { params: Promise<{ m
           </button>
         </form>
       </Section>
+
+      {/* AI Roleplay Simulator Scenarios */}
+      <AiScenarioEditor
+        moduleVersionId={mv.id}
+        moduleId={moduleId}
+        topics={topics}
+        scenarios={(db.aiRoleplayScenarios || []).filter((s) => s.moduleVersionId === mv.id)}
+      />
 
       {/* Practical scenario */}
       <Section title="Practical Scenario" desc="Level 2/3 of the testing model — the rubric evaluator uses this prompt.">

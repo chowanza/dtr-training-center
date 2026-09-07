@@ -9,6 +9,8 @@ import type { CertStatus } from "./constants";
 import type { RubricKey } from "./constants";
 import { STARTER_OUTLINE } from "./constants";
 import { moduleCompleteness, allModuleQuizzesPassed, orderedSteps, topicsForModuleVersion } from "./derive";
+import { processRoleplayTurn } from "./ai-roleplay";
+import type { AiRoleplayMessage } from "./types";
 
 function db() {
   return getDb();
@@ -741,3 +743,171 @@ export async function createModule(formData: FormData) {
   revalidatePath("/builder");
   redirect(`/builder/${moduleId}`);
 }
+
+// ---------------- Content Blocks ----------------
+
+export async function addContentBlock(formData: FormData) {
+  await requireStaff();
+  const stepId = z.string().parse(formData.get("stepId"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const type = z.enum(["text", "callout", "video", "audio", "file", "checklist"]).parse(formData.get("type"));
+  const title = String(formData.get("title") || "").trim();
+  const body = String(formData.get("body") || "").trim();
+  const mediaUrl = String(formData.get("mediaUrl") || "").trim();
+  const calloutType = (formData.get("calloutType") as "tip" | "warning" | "rule" | "script") || "tip";
+  const fileSize = String(formData.get("fileSize") || "").trim();
+  const fileFormat = String(formData.get("fileFormat") || "").trim();
+
+  const d = db();
+  if (!d.contentBlocks) d.contentBlocks = [];
+  const existing = d.contentBlocks.filter((b) => b.stepId === stepId);
+
+  d.contentBlocks.push({
+    id: newId("cb"),
+    stepId,
+    type,
+    sortOrder: existing.length + 1,
+    title: title || undefined,
+    body: body || undefined,
+    mediaUrl: mediaUrl || undefined,
+    calloutType: type === "callout" ? calloutType : undefined,
+    fileSize: fileSize || undefined,
+    fileFormat: fileFormat || undefined,
+  });
+
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+export async function updateContentBlock(formData: FormData) {
+  await requireStaff();
+  const id = z.string().parse(formData.get("id"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const title = String(formData.get("title") || "").trim();
+  const body = String(formData.get("body") || "").trim();
+  const mediaUrl = String(formData.get("mediaUrl") || "").trim();
+  const calloutType = (formData.get("calloutType") as "tip" | "warning" | "rule" | "script") || undefined;
+  const fileSize = String(formData.get("fileSize") || "").trim();
+  const fileFormat = String(formData.get("fileFormat") || "").trim();
+
+  const d = db();
+  const block = (d.contentBlocks || []).find((b) => b.id === id);
+  if (!block) throw new Error("Block not found");
+
+  block.title = title || undefined;
+  block.body = body || undefined;
+  block.mediaUrl = mediaUrl || undefined;
+  if (calloutType) block.calloutType = calloutType;
+  block.fileSize = fileSize || undefined;
+  block.fileFormat = fileFormat || undefined;
+
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+export async function deleteContentBlock(formData: FormData) {
+  await requireStaff();
+  const id = z.string().parse(formData.get("id"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const d = db();
+  d.contentBlocks = (d.contentBlocks || []).filter((b) => b.id !== id);
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+// ---------------- AI Roleplay Scenarios (Builder) ----------------
+
+export async function createAiScenario(formData: FormData) {
+  await requireStaff();
+  const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const title = z.string().min(1).parse(formData.get("title"));
+  const description = String(formData.get("description") || "").trim();
+  const customerPersona = z.string().min(1).parse(formData.get("customerPersona"));
+  const systemPrompt = z.string().min(1).parse(formData.get("systemPrompt"));
+  const rubricPrompt = String(formData.get("rubricPrompt") || "").trim();
+  const initialMessage = z.string().min(1).parse(formData.get("initialMessage"));
+  const maxTurns = Number(formData.get("maxTurns") || 5);
+  const passingScore = Number(formData.get("passingScore") || 80);
+  const topicId = String(formData.get("topicId") || "") || undefined;
+
+  const d = db();
+  if (!d.aiRoleplayScenarios) d.aiRoleplayScenarios = [];
+  d.aiRoleplayScenarios.push({
+    id: newId("ai-scen"),
+    moduleVersionId,
+    topicId,
+    title,
+    description,
+    customerPersona,
+    systemPrompt,
+    rubricPrompt,
+    initialMessage,
+    maxTurns,
+    passingScore,
+  });
+
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+export async function deleteAiScenario(formData: FormData) {
+  await requireStaff();
+  const id = z.string().parse(formData.get("id"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  const d = db();
+  d.aiRoleplayScenarios = (d.aiRoleplayScenarios || []).filter((s) => s.id !== id);
+  d.aiRoleplaySessions = (d.aiRoleplaySessions || []).filter((s) => s.scenarioId !== id);
+  persist();
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+// ---------------- AI Roleplay Turn Execution (Learner) ----------------
+
+export async function submitRoleplayTurnAction(params: {
+  scenarioId: string;
+  history: AiRoleplayMessage[];
+  userMessage: string;
+}) {
+  const d = db();
+  const scenario = (d.aiRoleplayScenarios || []).find((s) => s.id === params.scenarioId);
+  if (!scenario) throw new Error("Scenario not found");
+
+  const result = await processRoleplayTurn(scenario, params.history, params.userMessage);
+  return result;
+}
+
+export async function saveRoleplaySessionAction(params: {
+  scenarioId: string;
+  messages: AiRoleplayMessage[];
+  score?: number;
+  passed?: boolean;
+  feedback?: {
+    summary: string;
+    strengths: string[];
+    improvements: string[];
+    scriptAdherence: string;
+  };
+}) {
+  const user = await getCurrentUser();
+  const d = db();
+  if (!d.aiRoleplaySessions) d.aiRoleplaySessions = [];
+
+  const sessionId = newId("ai-sess");
+  d.aiRoleplaySessions.push({
+    id: sessionId,
+    userId: user.id,
+    scenarioId: params.scenarioId,
+    messages: params.messages,
+    status: "completed",
+    score: params.score,
+    passed: params.passed,
+    feedback: params.feedback,
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+  });
+
+  persist();
+  return { sessionId, success: true };
+}
+

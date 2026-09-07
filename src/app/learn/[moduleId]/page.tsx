@@ -7,7 +7,10 @@ import { topicsForModuleVersion, stepsForTopic, completedStepIds, quizzesForModu
 import { StatusPill } from "@/components/StatusPill";
 import { StepEmbedView } from "@/components/StepEmbedView";
 import { startTraining, completeStep, submitQuizAttempt } from "@/lib/actions";
-import type { Step, StepEmbed } from "@/lib/types";
+import { ContentBlockRenderer } from "@/components/blocks/ContentBlockRenderer";
+import { AiRoleplayWidget } from "@/components/roleplay/AiRoleplayWidget";
+import { Sparkles, Edit3 } from "lucide-react";
+import type { Step, StepEmbed, ContentBlock } from "@/lib/types";
 
 export default async function ModuleViewerPage({ params }: { params: Promise<{ moduleId: string }> }) {
   const { moduleId } = await params;
@@ -22,6 +25,9 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
   const cert = db.certifications.find((c) => c.userId === user.id && c.moduleId === moduleId);
   const status = cert?.status ?? "not_started";
   const done = completedStepIds(user.id);
+  const allBlocks = db.contentBlocks || [];
+  const aiScenarios = (db.aiRoleplayScenarios || []).filter((s) => s.moduleVersionId === mv.id);
+  const isStaff = user.isAdmin || user.isManager;
 
   const isReferenceMode = status === "certified" || status === "tested_passed";
   const isActiveFlow = status === "training" || status === "ready_for_test" || status === "tested_failed" || status === "needs_retraining";
@@ -54,7 +60,18 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
 
       <div className="flex items-start justify-between gap-4 mt-3 mb-6">
         <div>
-          <h1 className="font-[var(--font-display)] font-bold text-2xl tracking-tight mb-2">{mod.title}</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="font-[var(--font-display)] font-bold text-2xl tracking-tight mb-2">{mod.title}</h1>
+            {isStaff && (
+              <Link
+                href={`/builder/${moduleId}`}
+                className="btn-secondary text-xs inline-flex items-center gap-1.5 mb-2 py-1 px-2.5"
+              >
+                <Edit3 size={12} />
+                Edit in Studio
+              </Link>
+            )}
+          </div>
           <div className="text-xs text-ink-3 font-[var(--font-mono)]">v{mod.currentVersion} · {mod.estimatedMinutes} min</div>
         </div>
         <StatusPill status={status} />
@@ -89,7 +106,16 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
                 <h2 className="font-[var(--font-display)] font-semibold text-[15px] mb-3 pb-2 border-b border-rule">{topic.title}</h2>
                 <div className="space-y-5">
                   {steps.map((step) => (
-                    <StepView key={step.id} step={step} unlocked={isReferenceMode || done.has(step.id) || step.id === currentStep?.id} isCurrent={!isReferenceMode && step.id === currentStep?.id} moduleId={moduleId} moduleVersionId={mv.id} embeds={db.stepEmbeds.filter((e) => e.stepId === step.id)} />
+                    <StepView
+                      key={step.id}
+                      step={step}
+                      unlocked={isReferenceMode || done.has(step.id) || step.id === currentStep?.id}
+                      isCurrent={!isReferenceMode && step.id === currentStep?.id}
+                      moduleId={moduleId}
+                      moduleVersionId={mv.id}
+                      embeds={db.stepEmbeds.filter((e) => e.stepId === step.id)}
+                      blocks={allBlocks.filter((b) => b.stepId === step.id)}
+                    />
                   ))}
                 </div>
               </div>
@@ -124,6 +150,37 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {/* AI Roleplay Simulator Scenarios */}
+          {aiScenarios.length > 0 && (
+            <div className="pt-6 border-t border-rule">
+              <div className="flex items-center gap-2 mb-1.5">
+                <div className="p-1 rounded-lg bg-copper-soft text-copper-deep">
+                  <Sparkles size={16} />
+                </div>
+                <h2 className="font-[var(--font-display)] font-bold text-base text-ink">
+                  Interactive AI Roleplay Simulation
+                </h2>
+              </div>
+              <p className="text-xs text-ink-2 mb-4">
+                Practice in real time with this simulated customer to test your handling of objections and DTR scripts.
+              </p>
+              <div className="space-y-6">
+                {aiScenarios.map((scenario) => {
+                  const session = (db.aiRoleplaySessions || []).find(
+                    (sess) => sess.userId === user.id && sess.scenarioId === scenario.id
+                  );
+                  return (
+                    <AiRoleplayWidget
+                      key={scenario.id}
+                      scenario={scenario}
+                      existingSession={session}
+                    />
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -165,6 +222,7 @@ function StepView({
   moduleId,
   moduleVersionId,
   embeds,
+  blocks,
 }: {
   step: Step;
   unlocked: boolean;
@@ -172,23 +230,34 @@ function StepView({
   moduleId: string;
   moduleVersionId: string;
   embeds: StepEmbed[];
+  blocks: ContentBlock[];
 }) {
   if (!unlocked) {
     return <div className="text-sm text-ink-3 pl-3 border-l-2 border-rule">{step.title} — locked</div>;
   }
   return (
-    <div className="pl-3 border-l-2 border-patina">
-      <h3 className="font-[var(--font-mono)] text-[11px] uppercase tracking-wider text-ink-3 mb-1.5">{step.title}</h3>
-      <p className="text-[14.5px] whitespace-pre-wrap leading-relaxed mb-2">{step.body}</p>
+    <div className="pl-3.5 border-l-2 border-patina py-1">
+      <h3 className="font-[var(--font-mono)] text-[11.5px] uppercase font-bold tracking-wider text-ink-3 mb-2">{step.title}</h3>
+      {step.body && <p className="text-[14.5px] whitespace-pre-wrap leading-relaxed mb-3">{step.body}</p>}
+      
+      {/* Rich Multimedia Content Blocks */}
+      {blocks.length > 0 && (
+        <div className="space-y-3 mb-4">
+          {blocks.map((b) => (
+            <ContentBlockRenderer key={b.id} block={b} />
+          ))}
+        </div>
+      )}
+
       {embeds.length > 0 && (
-        <div className="space-y-2 mb-2">
+        <div className="space-y-2 mb-3">
           {embeds.map((e) => (
             <StepEmbedView key={e.id} embed={e} />
           ))}
         </div>
       )}
       {isCurrent && (
-        <form action={completeStep} className="mt-2">
+        <form action={completeStep} className="mt-3">
           <input type="hidden" name="stepId" value={step.id} />
           <input type="hidden" name="moduleId" value={moduleId} />
           <input type="hidden" name="moduleVersionId" value={moduleVersionId} />

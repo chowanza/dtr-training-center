@@ -288,6 +288,69 @@ export function createSeedDatabase(): Database {
     },
   ];
 
+  // ---- Rich Content Blocks for Module 1 ----
+  const contentBlocks: Database["contentBlocks"] = [
+    {
+      id: "cb-1-video",
+      stepId: "step-1-b3",
+      type: "video",
+      sortOrder: 1,
+      title: "Demo Video: 5-Minute Response Protocol",
+      body: "Watch the exact sequence from the phone ringing to the appointment landing in Workiz. (Pending: record and link the real video.)",
+      mediaUrl: "",
+    },
+    {
+      id: "cb-2-callout",
+      stepId: "step-1-b4",
+      type: "callout",
+      sortOrder: 1,
+      calloutType: "rule",
+      title: "DTR Golden Rule: Never guess a price",
+      body: "Under no circumstances give cost estimates over the phone without our estimator inspecting the roof first. If the customer pushes, use the \"I Don't Know\" script immediately.",
+    },
+    {
+      id: "cb-3-audio",
+      stepId: "step-1-c1",
+      type: "audio",
+      sortOrder: 1,
+      title: "Model Call: Flawless Lead Handling",
+      body: "Recording of a real call, once Luis uploads it. Pay attention to tone of voice, reading the address back for confirmation, and sending the text immediately.",
+      mediaUrl: "",
+      fileSize: "3:15 min",
+      fileFormat: "MP3",
+    },
+    {
+      id: "cb-4-file",
+      stepId: "step-1-c1",
+      type: "file",
+      sortOrder: 2,
+      title: "Quick Reference: Damage Classification & Warranties (PDF)",
+      body: "Reference document with the key qualifying questions for insurance claims and GAF warranty coverage.",
+      mediaUrl: "",
+      fileSize: "1.4 MB",
+      fileFormat: "PDF",
+    },
+  ];
+
+  // ---- AI Roleplay Scenarios for Module 1 ----
+  const aiRoleplayScenarios: Database["aiRoleplayScenarios"] = [
+    {
+      id: "ai-scen-1",
+      moduleVersionId: mv1.id,
+      topicId: "topic-1-d",
+      title: "Live Roleplay: Active Leak Emergency Call",
+      description: "Practice in real time with a customer distressed about a leak over her living room. Your goal is to calm her down, book it as an emergency, and avoid the trap of guessing a price.",
+      customerPersona: "Mrs. Carmen Morales. It's Saturday morning. She just found water dripping from her living room ceiling. She's anxious, talks fast, and demands to know the cost before giving you her details.",
+      systemPrompt: "You are Mrs. Carmen Morales, a worried homeowner in Orlando, Florida. It's raining hard and water started dripping from the ceiling onto your living room TV. You're calling Dream Team Roofing. You're distressed and urgently want to know if someone can come today and how much it will cost. If the CSR greets you politely, empathizes with your emergency, asks you to confirm your address and phone number, and calmly explains that an estimator will come out today to give an exact price, you calm down and book the appointment. If they hesitate or give you a made-up price, you get angry.",
+      rubricPrompt: "Evaluate whether the CSR agent: 1. Used the official Dream Team Roofing greeting with their name. 2. Showed genuine empathy for the customer's distress. 3. Asked for and confirmed name, phone number, and exact address. 4. Treated the case as a same-day emergency. 5. Never invented a price and used the 'I don't know' script to defer pricing to the estimator visit. 6. Confirmed the text message was sent.",
+      initialMessage: "Hi, good morning! Look, I'm desperate — it's raining and water is dripping from the ceiling onto my living room TV. Do you have someone available now, and how much is it going to cost to come out?",
+      maxTurns: 5,
+      passingScore: 80,
+    },
+  ];
+
+  const aiRoleplaySessions: Database["aiRoleplaySessions"] = [];
+
   return {
     roles: [roleOwner, roleOfficeManager, roleCsr],
     users: [uOwen, uLuis, uArmando, uMaria],
@@ -311,6 +374,9 @@ export function createSeedDatabase(): Database {
     certifications,
     certificationEvents,
     assignments,
+    contentBlocks,
+    aiRoleplayScenarios,
+    aiRoleplaySessions,
   };
 }
 

@@ -90,6 +90,60 @@ export interface StepEmbed {
   label: string;
 }
 
+export type ContentBlockType = "text" | "callout" | "video" | "audio" | "file" | "checklist";
+
+export interface ContentBlock {
+  id: string;
+  stepId: string;
+  type: ContentBlockType;
+  sortOrder: number;
+  title?: string;
+  body?: string;
+  calloutType?: "tip" | "warning" | "rule" | "script";
+  mediaUrl?: string;
+  fileSize?: string;
+  fileFormat?: string;
+  checklistItems?: { id: string; text: string; defaultChecked?: boolean }[];
+}
+
+export interface AiRoleplayScenario {
+  id: string;
+  moduleVersionId: string;
+  topicId?: string;
+  title: string;
+  description: string;
+  customerPersona: string;
+  systemPrompt: string;
+  rubricPrompt: string;
+  initialMessage: string;
+  maxTurns: number;
+  passingScore: number;
+}
+
+export interface AiRoleplayMessage {
+  sender: "ai_customer" | "user_agent";
+  text: string;
+  timestamp: string;
+}
+
+export interface AiRoleplaySession {
+  id: string;
+  userId: string;
+  scenarioId: string;
+  messages: AiRoleplayMessage[];
+  status: "in_progress" | "completed";
+  score?: number;
+  passed?: boolean;
+  feedback?: {
+    summary: string;
+    strengths: string[];
+    improvements: string[];
+    scriptAdherence: string;
+  };
+  startedAt: string;
+  completedAt?: string;
+}
+
 export interface Step {
   id: string;
   topicId: string;
@@ -227,4 +281,7 @@ export interface Database {
   certifications: Certification[];
   certificationEvents: CertificationEvent[];
   assignments: Assignment[];
+  contentBlocks: ContentBlock[];
+  aiRoleplayScenarios: AiRoleplayScenario[];
+  aiRoleplaySessions: AiRoleplaySession[];
 }
