@@ -13,7 +13,11 @@ import { ensureProfileForAuthUser } from "@/lib/auth-provision";
  * exchanges for a real server-side session (cookies set via createSupabaseServerClient).
  */
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
+  // Not new URL(request.url).origin: self-hosted behind Docker with no trusted reverse proxy,
+  // Next's standalone server reconstructs that from its own bind address/port (HOSTNAME/PORT —
+  // 0.0.0.0:3000 here), not the client-facing Host header, producing an unreachable redirect.
+  const origin = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  const { searchParams } = new URL(request.url);
   const token_hash = searchParams.get("token_hash");
   const type = searchParams.get("type") as EmailOtpType | null;
   const next = searchParams.get("next") ?? "/";

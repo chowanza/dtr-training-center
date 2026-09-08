@@ -6,7 +6,9 @@ import { ensureProfileForAuthUser } from "@/lib/auth-provision";
  * sure a `profiles` row exists for this person (linking to one an admin already made, or
  * bootstrapping a brand-new organization for them — see ensureProfileForAuthUser). */
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
+  // Not new URL(request.url).origin — see the comment in src/app/auth/confirm/route.ts.
+  const origin = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const next = searchParams.get("next") ?? "/";
 
