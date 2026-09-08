@@ -17,9 +17,9 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ u
   const viewer = await requireCurrentUser();
   const orgId = viewer.organizationId;
 
-  const { user, roles, modules, certifications, assignments, memberGroups } = await withTenantContext(orgId, async (tx) => {
+  const { user, roles, modules, certifications, assignments, requirements, memberGroups } = await withTenantContext(orgId, async (tx) => {
     const [user] = await tx.select().from(schema.profiles).where(and(eq(schema.profiles.organizationId, orgId), eq(schema.profiles.id, userId))).limit(1);
-    if (!user) return { user: undefined, roles: [], modules: [], certifications: [], assignments: [], memberGroups: [] };
+    if (!user) return { user: undefined, roles: [], modules: [], certifications: [], assignments: [], requirements: [], memberGroups: [] };
     const roles = await tx.select().from(schema.roles).where(eq(schema.roles.organizationId, orgId));
     const modules = await tx.select().from(schema.modules).where(eq(schema.modules.organizationId, orgId));
     const certifications = await tx
@@ -27,13 +27,28 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ u
       .from(schema.certifications)
       .where(and(eq(schema.certifications.organizationId, orgId), eq(schema.certifications.userId, userId)));
     const assignments = await tx.select().from(schema.assignments).where(and(eq(schema.assignments.organizationId, orgId), eq(schema.assignments.userId, userId)));
+    const requirements = await tx
+      .select()
+      .from(schema.roleModuleRequirements)
+      .where(and(eq(schema.roleModuleRequirements.organizationId, orgId), eq(schema.roleModuleRequirements.roleId, user.roleId), eq(schema.roleModuleRequirements.isRequired, true)))
+      .orderBy(schema.roleModuleRequirements.sequence);
     const memberRows = await tx.select().from(schema.groupMembers).where(and(eq(schema.groupMembers.organizationId, orgId), eq(schema.groupMembers.userId, userId)));
     const groupIds = memberRows.map((m) => m.groupId);
     const allGroups = groupIds.length ? await tx.select().from(schema.groups).where(eq(schema.groups.organizationId, orgId)) : [];
     const memberGroups = groupIds.map((gid) => allGroups.find((g) => g.id === gid)).filter((g): g is NonNullable<typeof g> => Boolean(g));
-    return { user, roles, modules, certifications, assignments, memberGroups };
+    return { user, roles, modules, certifications, assignments, requirements, memberGroups };
   });
   if (!user) notFound();
+
+  // "Training path": this role's required modules in sequence order first (their actual
+  // onboarding order), then anything else they have a certification for but isn't currently
+  // required (e.g. a past role's module) tacked on at the end so history never just disappears.
+  const moduleById = new Map(modules.map((m) => [m.id, m]));
+  const requiredIds = new Set(requirements.map((r) => r.moduleId));
+  const pathModules = [
+    ...requirements.map((r) => moduleById.get(r.moduleId)).filter((m): m is NonNullable<typeof m> => Boolean(m)),
+    ...modules.filter((m) => !requiredIds.has(m.id) && certifications.some((c) => c.moduleId === m.id)).sort((a, b) => a.title.localeCompare(b.title)),
+  ];
 
   // No due-date UI yet (assignments.dueAt is always null today) — until then, "overdue" means
   // assigned two weeks ago or more and still not certified. Simple, no new infra, matches the
@@ -43,7 +58,7 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ u
   const isStaffViewer = viewer.accessRole === "admin" || viewer.accessRole === "editor";
 
   const { done, total, pct } = await completionForUser(orgId, userId);
-  const progressByModule = await learnerModuleProgress(orgId, userId, modules.map((m) => m.id));
+  const progressByModule = await learnerModuleProgress(orgId, userId, pathModules.map((m) => m.id));
 
   return (
     <div className="max-w-2xl">
@@ -156,59 +171,84 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ u
         </div>
       )}
 
-      <div className="border border-rule rounded-xl bg-surface divide-y divide-rule">
-        {modules.map((m) => {
-          const cert = certifications.find((c) => c.moduleId === m.id);
-          const status = cert?.status ?? "not_started";
-          const stepPct = progressByModule.get(m.id) ?? 0;
-          const assignedAt = assignedAtByModule.get(m.id);
-          const isOverdue = Boolean(assignedAt) && status !== "certified" && Date.now() - assignedAt!.getTime() >= OVERDUE_AFTER_MS;
-          return (
-            <div key={m.id} className="flex items-center justify-between gap-4 px-5 py-4">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[14.5px] font-medium">{m.title}</span>
-                  {isOverdue && <span className="pill p-bad text-[10.5px]">⚠ Overdue</span>}
-                  {isOverdue && isStaffViewer && (
-                    <a
-                      href={`mailto:${user.email}?subject=${encodeURIComponent(`Reminder: ${m.title}`)}&body=${encodeURIComponent(
-                        `Hi ${user.name.split(" ")[0]}, following up — you still have "${m.title}" to finish in the Training Center. Let me know if you're stuck on anything.`
-                      )}`}
-                      className="text-[11px] text-navy hover:underline font-medium"
-                    >
-                      Nudge
-                    </a>
-                  )}
-                </div>
-                {status !== "not_started" && (
-                  <div className="flex items-center gap-2 mt-1.5 max-w-[180px]">
-                    <div className="h-1.5 flex-1 bg-surface-2 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full ${stepPct >= 100 ? "bg-patina" : stepPct >= 40 ? "bg-amber" : "bg-copper"}`}
-                        style={{ width: `${stepPct}%` }}
-                      />
+      <h2 className="font-[var(--font-display)] font-semibold text-[15px] mb-4">Training path</h2>
+      {pathModules.length === 0 ? (
+        <p className="text-sm text-ink-3">No content required for this role yet.</p>
+      ) : (
+        <div className="relative">
+          <div className="absolute left-4 top-2 bottom-2 w-px bg-rule" />
+          <div>
+            {pathModules.map((m, i) => {
+              const cert = certifications.find((c) => c.moduleId === m.id);
+              const status = cert?.status ?? "not_started";
+              const stepPct = progressByModule.get(m.id) ?? 0;
+              const assignedAt = assignedAtByModule.get(m.id);
+              const isOverdue = Boolean(assignedAt) && status !== "certified" && Date.now() - assignedAt!.getTime() >= OVERDUE_AFTER_MS;
+              const isCertified = status === "certified";
+              return (
+                <div key={m.id} className="relative flex gap-4 pb-6 last:pb-0">
+                  <span
+                    className={`relative z-10 shrink-0 w-8 h-8 rounded-full border-2 flex items-center justify-center text-[11px] font-semibold font-[var(--font-mono)] ${
+                      isCertified
+                        ? "bg-patina border-patina text-white"
+                        : status === "not_started"
+                          ? "bg-surface border-rule-2 text-ink-3"
+                          : "bg-amber-soft border-amber text-amber"
+                    }`}
+                  >
+                    {isCertified ? "✓" : i + 1}
+                  </span>
+                  <div className="flex-1 min-w-0 pt-0.5">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[14.5px] font-medium">{m.title}</span>
+                          {isOverdue && <span className="pill p-bad text-[10.5px]">⚠ Overdue</span>}
+                          {isOverdue && isStaffViewer && (
+                            <a
+                              href={`mailto:${user.email}?subject=${encodeURIComponent(`Reminder: ${m.title}`)}&body=${encodeURIComponent(
+                                `Hi ${user.name.split(" ")[0]}, following up — you still have "${m.title}" to finish in the Training Center. Let me know if you're stuck on anything.`
+                              )}`}
+                              className="text-[11px] text-navy hover:underline font-medium"
+                            >
+                              Nudge
+                            </a>
+                          )}
+                        </div>
+                        <span className="text-[11px] text-ink-3 font-[var(--font-mono)]">~{m.estimatedMinutes} min read</span>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <StatusPill status={status} />
+                        {status === "certified" && cert && (
+                          <Link href={`/cert/${cert.id}`} className="text-xs text-navy hover:underline font-medium">
+                            Record
+                          </Link>
+                        )}
+                        {(status === "tested_passed" || status === "tested_failed") && (
+                          <Link href={`/certify/${userId}/${m.id}`} className="text-xs text-navy hover:underline font-medium">
+                            Evaluate
+                          </Link>
+                        )}
+                      </div>
                     </div>
-                    <span className="text-[10.5px] text-ink-3 font-[var(--font-mono)]">{stepPct}%</span>
+                    {status !== "not_started" && (
+                      <div className="flex items-center gap-2 mt-1.5 max-w-[220px]">
+                        <div className="h-1.5 flex-1 bg-surface-2 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full ${stepPct >= 100 ? "bg-patina" : stepPct >= 40 ? "bg-amber" : "bg-copper"}`}
+                            style={{ width: `${stepPct}%` }}
+                          />
+                        </div>
+                        <span className="text-[10.5px] text-ink-3 font-[var(--font-mono)]">{stepPct}%</span>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <StatusPill status={status} />
-                {status === "certified" && cert && (
-                  <Link href={`/cert/${cert.id}`} className="text-xs text-navy hover:underline font-medium">
-                    Record
-                  </Link>
-                )}
-                {(status === "tested_passed" || status === "tested_failed") && (
-                  <Link href={`/certify/${userId}/${m.id}`} className="text-xs text-navy hover:underline font-medium">
-                    Evaluate
-                  </Link>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
