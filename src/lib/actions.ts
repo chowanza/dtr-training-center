@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db, withTenantContext } from "./drizzle/client";
 import * as schema from "./drizzle/schema";
 import { requireCurrentUser } from "./session";
@@ -12,6 +12,7 @@ import type { CertStatus, RubricKey } from "./constants";
 import { STARTER_OUTLINE } from "./constants";
 import { moduleCompleteness, allModuleQuizzesPassed, orderedSteps } from "./derive";
 import { reindexModule } from "./knowledge-index";
+import { createNotificationTx } from "./notifications";
 import { processRoleplayTurn } from "./ai-roleplay";
 import { answerFromKnowledgeBase } from "./ai-chat";
 import type { AiRoleplayMessage } from "./types";
@@ -322,6 +323,14 @@ export async function publishModule(formData: FormData) {
       for (const cert of certified) {
         await logCertEvent(tx, user.organizationId, cert.id, cert.status, "needs_retraining", user.id, `Module republished as v${newVersion} (material change) — retraining required.`);
         await tx.update(schema.certifications).set({ status: "needs_retraining" }).where(eq(schema.certifications.id, cert.id));
+        await createNotificationTx(tx, {
+          organizationId: user.organizationId,
+          userId: cert.userId,
+          type: "content_changed",
+          title: `${mod.title} was updated`,
+          body: changelog || `Republished as v${newVersion} — this changed enough that you need to retrain.`,
+          linkHref: `/learn/${moduleId}`,
+        });
       }
     }
   });
@@ -967,4 +976,29 @@ export async function saveRoleplaySessionAction(params: {
 export async function askKnowledgeBaseAction(question: string) {
   const user = await requireCurrentUser();
   return answerFromKnowledgeBase(user.organizationId, question);
+}
+
+// ---------------- Notifications ----------------
+
+export async function markNotificationRead(formData: FormData) {
+  const user = await requireCurrentUser();
+  const id = z.string().parse(formData.get("id"));
+  await withTenantContext(user.organizationId, (tx) =>
+    tx
+      .update(schema.notifications)
+      .set({ readAt: new Date() })
+      .where(and(eq(schema.notifications.organizationId, user.organizationId), eq(schema.notifications.userId, user.id), eq(schema.notifications.id, id)))
+  );
+  revalidatePath("/", "layout");
+}
+
+export async function markAllNotificationsRead() {
+  const user = await requireCurrentUser();
+  await withTenantContext(user.organizationId, (tx) =>
+    tx
+      .update(schema.notifications)
+      .set({ readAt: new Date() })
+      .where(and(eq(schema.notifications.organizationId, user.organizationId), eq(schema.notifications.userId, user.id), isNull(schema.notifications.readAt)))
+  );
+  revalidatePath("/", "layout");
 }

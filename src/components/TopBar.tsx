@@ -3,8 +3,28 @@
 import { useRouter } from "next/navigation";
 import { Menu, Search } from "lucide-react";
 import { UserMenu } from "./UserMenu";
+import { NotificationBell } from "./NotificationBell";
 
-export function TopBar({ onMenuClick, name, email }: { onMenuClick: () => void; name: string; email: string }) {
+interface NotificationRow {
+  id: string;
+  title: string;
+  body: string;
+  linkHref: string | null;
+  readAt: Date | null;
+  createdAt: Date;
+}
+
+export function TopBar({
+  onMenuClick,
+  name,
+  email,
+  notifications,
+}: {
+  onMenuClick: () => void;
+  name: string;
+  email: string;
+  notifications: NotificationRow[];
+}) {
   const router = useRouter();
 
   return (
@@ -28,6 +48,7 @@ export function TopBar({ onMenuClick, name, email }: { onMenuClick: () => void; 
         />
       </form>
       <div className="flex-1 sm:hidden" />
+      <NotificationBell notifications={notifications} />
       <UserMenu name={name} email={email} />
     </header>
   );

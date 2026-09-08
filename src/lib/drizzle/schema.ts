@@ -389,5 +389,21 @@ export const knowledgeChunks = pgTable("knowledge_chunks", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ---------------- Notifications ----------------
+
+export const notifications = pgTable("notifications", {
+  id: id(),
+  organizationId: orgId(),
+  userId: uuid("user_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  // Free text, not an enum — this is the first notification type and more will follow; an enum
+  // would just mean a migration every time a new one's added.
+  type: text("type").notNull(),
+  title: text("title").notNull(),
+  body: text("body").notNull().default(""),
+  linkHref: text("link_href"),
+  readAt: timestamp("read_at", { withTimezone: true }),
+  createdAt: createdAt(),
+});
+
 // Referenced by the RLS migration to keep the "current org" session variable typed consistently.
 export const currentOrgIdExpr = sql`current_setting('app.current_org_id', true)::uuid`;
