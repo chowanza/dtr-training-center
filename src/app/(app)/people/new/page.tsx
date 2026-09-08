@@ -47,9 +47,20 @@ export default async function NewPersonPage() {
             <option value="admin">Admin — full access, incl. people &amp; certifying</option>
           </select>
         </label>
+        <label className="block text-sm">
+          <span className="block text-ink-2 mb-1 font-medium">Password (optional)</span>
+          <input
+            name="password"
+            type="password"
+            minLength={8}
+            placeholder="Leave blank to have them register themselves"
+            className="w-full border border-rule-2 rounded-lg bg-paper px-3 py-2"
+          />
+        </label>
         <p className="text-[12px] text-ink-3">
-          Modules already required for this role will be assigned automatically. They can sign in once they register
-          with this same email.
+          Modules already required for this role will be assigned automatically. Set a password now to give them a
+          ready-to-use login immediately — otherwise they can sign in once they register themselves at{" "}
+          <span className="font-[var(--font-mono)]">/register</span> with this same email.
         </p>
         <button type="submit" className="btn-primary">
           Add Person

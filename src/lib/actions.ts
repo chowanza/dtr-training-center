@@ -513,15 +513,17 @@ const createUserSchema = z.object({
   email: z.string().email(),
   roleId: z.string(),
   accessRole: z.enum(["admin", "editor", "learner"]),
+  password: z.union([z.string().min(8), z.literal("")]).optional(),
 });
 
 export async function createUser(formData: FormData) {
   const admin = await requireAdmin();
-  const { name, email, roleId, accessRole } = createUserSchema.parse({
+  const { name, email, roleId, accessRole, password } = createUserSchema.parse({
     name: formData.get("name"),
     email: formData.get("email"),
     roleId: formData.get("roleId"),
     accessRole: formData.get("accessRole") || "learner",
+    password: formData.get("password") || undefined,
   });
 
   const newUserId = await withTenantContext(admin.organizationId, async (tx) => {
@@ -546,6 +548,20 @@ export async function createUser(formData: FormData) {
     await autoAssignForRole(tx, admin.organizationId, created.id, roleId, admin.id);
     return created.id;
   });
+
+  // Optional: give them a ready-to-use login immediately instead of making them self-register at
+  // /register. Best-effort — if this fails (e.g. an auth account already exists for that email
+  // from a prior self-registration attempt), the roster entry above still stands; they can
+  // register themselves, or an admin can retry setting a password from their profile page.
+  if (password) {
+    try {
+      const { data, error } = await createSupabaseAdminClient().auth.admin.createUser({ email: email.toLowerCase(), password, email_confirm: true });
+      if (error) throw error;
+      await withTenantContext(admin.organizationId, (tx) => tx.update(schema.profiles).set({ authUserId: data.user.id }).where(eq(schema.profiles.id, newUserId)));
+    } catch (err) {
+      console.error(`Failed to create login for ${email}:`, err);
+    }
+  }
 
   revalidatePath("/people");
   redirect(`/people/${newUserId}`);
