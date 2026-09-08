@@ -6,7 +6,7 @@ import { withTenantContext } from "@/lib/drizzle/client";
 import * as schema from "@/lib/drizzle/schema";
 import { completionForUser } from "@/lib/derive";
 import { StatusPill } from "@/components/StatusPill";
-import { updateUser, setUserActive } from "@/lib/actions";
+import { updateUser, setUserActive, adminSetUserPassword } from "@/lib/actions";
 
 function initials(name: string) {
   return name.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase();
@@ -104,16 +104,46 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ u
               Save Changes
             </button>
           </form>
-          <form action={setUserActive} className="mt-3 inline-block mr-3">
-            <input type="hidden" name="id" value={user.id} />
-            <input type="hidden" name="active" value={user.employmentStatus === "active" ? "false" : "true"} />
-            <button type="submit" className="btn-secondary">
-              {user.employmentStatus === "active" ? "Deactivate person" : "Reactivate person"}
-            </button>
-          </form>
-          <Link href={`/people/${user.id}/delete`} className="text-xs text-brick hover:underline">
-            Delete person permanently
-          </Link>
+          <div className="border-t border-rule mt-5 pt-5">
+            <h3 className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-wider text-ink-3 mb-2">Password</h3>
+            {user.authUserId ? (
+              <form action={adminSetUserPassword} className="flex flex-wrap items-end gap-2">
+                <input type="hidden" name="id" value={user.id} />
+                <label className="block text-sm">
+                  <span className="block text-ink-2 mb-1">New password</span>
+                  <input
+                    name="password"
+                    type="password"
+                    required
+                    minLength={8}
+                    placeholder="At least 8 characters"
+                    className="border border-rule-2 rounded-lg bg-paper px-3 py-2 text-sm"
+                  />
+                </label>
+                <button type="submit" className="btn-secondary">
+                  Set Password
+                </button>
+              </form>
+            ) : (
+              <p className="text-sm text-ink-3">
+                {user.name} hasn&apos;t registered an account yet — they need to sign up at{" "}
+                <span className="font-[var(--font-mono)]">/register</span> with this email before a password can be set.
+              </p>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 border-t border-rule mt-5 pt-5">
+            <form action={setUserActive}>
+              <input type="hidden" name="id" value={user.id} />
+              <input type="hidden" name="active" value={user.employmentStatus === "active" ? "false" : "true"} />
+              <button type="submit" className="btn-secondary">
+                {user.employmentStatus === "active" ? "Deactivate person" : "Reactivate person"}
+              </button>
+            </form>
+            <Link href={`/people/${user.id}/delete`} className="text-xs text-brick hover:underline">
+              Delete person permanently
+            </Link>
+          </div>
         </div>
       )}
 

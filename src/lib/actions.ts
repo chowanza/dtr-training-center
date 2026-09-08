@@ -7,6 +7,7 @@ import { and, eq } from "drizzle-orm";
 import { db, withTenantContext } from "./drizzle/client";
 import * as schema from "./drizzle/schema";
 import { requireCurrentUser } from "./session";
+import { createSupabaseAdminClient } from "./supabase/admin";
 import type { CertStatus, RubricKey } from "./constants";
 import { STARTER_OUTLINE } from "./constants";
 import { moduleCompleteness, allModuleQuizzesPassed, orderedSteps } from "./derive";
@@ -598,6 +599,24 @@ export async function setUserActive(formData: FormData) {
     if (result.length === 0) throw new Error("User not found");
   });
   revalidatePath("/people");
+  revalidatePath(`/people/${id}`);
+}
+
+const setPasswordSchema = z.object({ id: z.string(), password: z.string().min(8) });
+
+export async function adminSetUserPassword(formData: FormData) {
+  const admin = await requireAdmin();
+  const { id, password } = setPasswordSchema.parse({ id: formData.get("id"), password: formData.get("password") });
+
+  const [target] = await withTenantContext(admin.organizationId, (tx) =>
+    tx.select({ authUserId: schema.profiles.authUserId }).from(schema.profiles).where(and(eq(schema.profiles.organizationId, admin.organizationId), eq(schema.profiles.id, id))).limit(1)
+  );
+  if (!target) throw new Error("User not found");
+  if (!target.authUserId) throw new Error("This person hasn't registered an account yet — they need to sign up at /register first.");
+
+  const { error } = await createSupabaseAdminClient().auth.admin.updateUserById(target.authUserId, { password });
+  if (error) throw new Error(`Failed to set password: ${error.message}`);
+
   revalidatePath(`/people/${id}`);
 }
 
