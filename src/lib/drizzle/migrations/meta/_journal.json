@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1788811930136,
+      "tag": "0000_mushy_landau",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788811972807,
+      "tag": "0001_rls_and_auth_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788814189738,
+      "tag": "0002_high_ghost_rider",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788831411659,
+      "tag": "0003_access_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788874843945,
+      "tag": "0004_drop_embedding",
+      "breakpoints": true
+    }
+  ]
+}

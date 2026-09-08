@@ -32,12 +32,16 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env*.example
 
 # vercel
 .vercel
 
-# local demo data store (regenerated from src/lib/seed.ts)
+# local JSON-store artifact from before the Postgres migration — no longer used
 /.data/
+
+# claude code session-local state (not project config)
+.claude/scheduled_tasks.lock
 
 # typescript
 *.tsbuildinfo

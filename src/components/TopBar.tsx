@@ -2,10 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { Menu, Search } from "lucide-react";
-import { RoleSwitcher } from "./RoleSwitcher";
-import type { User } from "@/lib/types";
+import { UserMenu } from "./UserMenu";
 
-export function TopBar({ onMenuClick, users, currentUserId }: { onMenuClick: () => void; users: User[]; currentUserId: string }) {
+export function TopBar({ onMenuClick, name, email }: { onMenuClick: () => void; name: string; email: string }) {
   const router = useRouter();
 
   return (
@@ -29,7 +28,7 @@ export function TopBar({ onMenuClick, users, currentUserId }: { onMenuClick: () 
         />
       </form>
       <div className="flex-1 sm:hidden" />
-      <RoleSwitcher users={users} currentUserId={currentUserId} />
+      <UserMenu name={name} email={email} />
     </header>
   );
 }

@@ -13,7 +13,7 @@ export function Sidebar({
 }: {
   open: boolean;
   onClose: () => void;
-  currentUser: { isAdmin: boolean; isManager: boolean };
+  currentUser: { accessRole: "admin" | "editor" | "learner" };
 }) {
   const pathname = usePathname();
   const items = NAV_ITEMS.filter((item) => canAccess(item.access, currentUser));

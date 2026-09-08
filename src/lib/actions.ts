@@ -3,207 +3,223 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getDb, newId, persist } from "./db";
-import { getCurrentUser, setCurrentUserCookie } from "./session";
-import type { CertStatus } from "./constants";
-import type { RubricKey } from "./constants";
+import { and, eq } from "drizzle-orm";
+import { db, withTenantContext } from "./drizzle/client";
+import * as schema from "./drizzle/schema";
+import { requireCurrentUser } from "./session";
+import type { CertStatus, RubricKey } from "./constants";
 import { STARTER_OUTLINE } from "./constants";
-import { moduleCompleteness, allModuleQuizzesPassed, orderedSteps, topicsForModuleVersion } from "./derive";
+import { moduleCompleteness, allModuleQuizzesPassed, orderedSteps } from "./derive";
+import { reindexModule } from "./knowledge-index";
 import { processRoleplayTurn } from "./ai-roleplay";
+import { answerFromKnowledgeBase } from "./ai-chat";
 import type { AiRoleplayMessage } from "./types";
 
-function db() {
-  return getDb();
+type Tx = typeof db;
+
+async function requireStaff() {
+  const user = await requireCurrentUser();
+  if (!(user.accessRole === "admin" || user.accessRole === "editor")) throw new Error("Not authorized to edit content");
+  return user;
 }
 
-function logCertEvent(certificationId: string, fromStatus: CertStatus | null, toStatus: CertStatus, actorId: string, reason: string) {
-  db().certificationEvents.push({
-    id: newId("certev"),
-    certificationId,
-    fromStatus,
-    toStatus,
-    actorId,
-    reason,
-    occurredAt: new Date().toISOString(),
-  });
+async function requireAdmin() {
+  const user = await requireCurrentUser();
+  if (user.accessRole !== "admin") throw new Error("Admin access required");
+  return user;
 }
 
-// ---------------- Session ----------------
+async function logCertEvent(
+  tx: Tx,
+  orgId: string,
+  certificationId: string,
+  fromStatus: CertStatus | null,
+  toStatus: CertStatus,
+  actorId: string,
+  reason: string
+) {
+  await tx.insert(schema.certificationEvents).values({ organizationId: orgId, certificationId, fromStatus, toStatus, actorId, reason });
+}
 
-export async function switchUser(formData: FormData) {
-  const userId = z.string().parse(formData.get("userId"));
-  await setCurrentUserCookie(userId);
-  revalidatePath("/", "layout");
+async function getOrCreateCert(tx: Tx, orgId: string, userId: string, moduleId: string) {
+  const existing = await tx
+    .select()
+    .from(schema.certifications)
+    .where(and(eq(schema.certifications.organizationId, orgId), eq(schema.certifications.userId, userId), eq(schema.certifications.moduleId, moduleId)))
+    .limit(1);
+  if (existing[0]) return existing[0];
+  const [cert] = await tx.insert(schema.certifications).values({ organizationId: orgId, userId, moduleId, status: "not_started" }).returning();
+  await logCertEvent(tx, orgId, cert.id, null, "not_started", userId, "Assigned.");
+  return cert;
+}
+
+async function getOrCreateQuiz(tx: Tx, orgId: string, topicId: string) {
+  const existing = await tx.select().from(schema.quizzes).where(and(eq(schema.quizzes.organizationId, orgId), eq(schema.quizzes.topicId, topicId))).limit(1);
+  if (existing[0]) return existing[0];
+  const [quiz] = await tx.insert(schema.quizzes).values({ organizationId: orgId, topicId }).returning();
+  return quiz;
+}
+
+async function autoAssignForRole(tx: Tx, orgId: string, userId: string, roleId: string, assignedBy: string) {
+  const requirements = await tx
+    .select()
+    .from(schema.roleModuleRequirements)
+    .where(and(eq(schema.roleModuleRequirements.organizationId, orgId), eq(schema.roleModuleRequirements.roleId, roleId), eq(schema.roleModuleRequirements.isRequired, true)));
+  for (const req of requirements) {
+    const already = await tx
+      .select({ id: schema.assignments.id })
+      .from(schema.assignments)
+      .where(and(eq(schema.assignments.organizationId, orgId), eq(schema.assignments.userId, userId), eq(schema.assignments.moduleId, req.moduleId)))
+      .limit(1);
+    if (already.length === 0) {
+      await tx.insert(schema.assignments).values({ organizationId: orgId, userId, moduleId: req.moduleId, assignedBy, source: "auto" });
+    }
+  }
 }
 
 // ---------------- Module Builder ----------------
 
-async function requireStaff() {
-  const user = await getCurrentUser();
-  if (!(user.isAdmin || user.isManager)) throw new Error("Not authorized to edit content");
-  return user;
-}
-
 export async function createTopic(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
   const moduleId = z.string().parse(formData.get("moduleId"));
   const title = z.string().min(1).parse(formData.get("title"));
-  const d = db();
-  const existing = topicsForModuleVersion(moduleVersionId);
-  d.topics.push({ id: newId("topic"), moduleVersionId, title, sortOrder: existing.length + 1 });
-  persist();
+  await withTenantContext(user.organizationId, async (tx) => {
+    const existing = await tx.select({ id: schema.topics.id }).from(schema.topics).where(and(eq(schema.topics.organizationId, user.organizationId), eq(schema.topics.moduleVersionId, moduleVersionId)));
+    await tx.insert(schema.topics).values({ organizationId: user.organizationId, moduleVersionId, title, sortOrder: existing.length + 1 });
+  });
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function updateTopicTitle(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const moduleId = z.string().parse(formData.get("moduleId"));
   const title = z.string().min(1).parse(formData.get("title"));
-  const d = db();
-  const topic = d.topics.find((t) => t.id === id);
-  if (!topic) throw new Error("Topic not found");
-  topic.title = title;
-  persist();
+  await withTenantContext(user.organizationId, async (tx) => {
+    const result = await tx
+      .update(schema.topics)
+      .set({ title })
+      .where(and(eq(schema.topics.organizationId, user.organizationId), eq(schema.topics.id, id)))
+      .returning({ id: schema.topics.id });
+    if (result.length === 0) throw new Error("Topic not found");
+  });
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function deleteTopic(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const moduleId = z.string().parse(formData.get("moduleId"));
-  const d = db();
-  const stepIds = new Set(d.steps.filter((s) => s.topicId === id).map((s) => s.id));
-  const quizIds = new Set(d.quizzes.filter((q) => q.topicId === id).map((q) => q.id));
-  d.steps = d.steps.filter((s) => s.topicId !== id);
-  d.stepEmbeds = d.stepEmbeds.filter((e) => !stepIds.has(e.stepId));
-  d.stepProgress = d.stepProgress.filter((p) => !stepIds.has(p.stepId));
-  d.quizQuestions = d.quizQuestions.filter((q) => !quizIds.has(q.quizId));
-  d.quizzes = d.quizzes.filter((q) => q.topicId !== id);
-  d.topics = d.topics.filter((t) => t.id !== id);
-  persist();
+  await withTenantContext(user.organizationId, (tx) => tx.delete(schema.topics).where(and(eq(schema.topics.organizationId, user.organizationId), eq(schema.topics.id, id))));
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function createStep(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const topicId = z.string().parse(formData.get("topicId"));
   const moduleId = z.string().parse(formData.get("moduleId"));
   const title = z.string().min(1).parse(formData.get("title"));
-  const d = db();
-  const existing = d.steps.filter((s) => s.topicId === topicId);
-  d.steps.push({ id: newId("step"), topicId, title, body: "", sortOrder: existing.length + 1 });
-  persist();
+  await withTenantContext(user.organizationId, async (tx) => {
+    const existing = await tx.select({ id: schema.steps.id }).from(schema.steps).where(and(eq(schema.steps.organizationId, user.organizationId), eq(schema.steps.topicId, topicId)));
+    await tx.insert(schema.steps).values({ organizationId: user.organizationId, topicId, title, body: "", sortOrder: existing.length + 1 });
+  });
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function updateStep(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const moduleId = z.string().parse(formData.get("moduleId"));
   const title = z.string().min(1).parse(formData.get("title"));
   const body = z.string().parse(formData.get("body"));
-  const d = db();
-  const step = d.steps.find((s) => s.id === id);
-  if (!step) throw new Error("Step not found");
-  step.title = title;
-  step.body = body;
-  persist();
+  await withTenantContext(user.organizationId, async (tx) => {
+    const result = await tx
+      .update(schema.steps)
+      .set({ title, body })
+      .where(and(eq(schema.steps.organizationId, user.organizationId), eq(schema.steps.id, id)))
+      .returning({ id: schema.steps.id });
+    if (result.length === 0) throw new Error("Step not found");
+  });
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function deleteStep(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const moduleId = z.string().parse(formData.get("moduleId"));
-  const d = db();
-  d.stepEmbeds = d.stepEmbeds.filter((e) => e.stepId !== id);
-  d.stepProgress = d.stepProgress.filter((p) => p.stepId !== id);
-  d.steps = d.steps.filter((s) => s.id !== id);
-  persist();
+  await withTenantContext(user.organizationId, (tx) => tx.delete(schema.steps).where(and(eq(schema.steps.organizationId, user.organizationId), eq(schema.steps.id, id))));
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function addStepEmbed(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const stepId = z.string().parse(formData.get("stepId"));
   const moduleId = z.string().parse(formData.get("moduleId"));
   const kind = z.enum(["video", "image", "link"]).parse(formData.get("kind"));
   const url = z.string().url().parse(formData.get("url"));
   const label = z.string().parse(formData.get("label"));
-  db().stepEmbeds.push({ id: newId("embed"), stepId, kind, url, label: label || url });
-  persist();
+  await withTenantContext(user.organizationId, (tx) =>
+    tx.insert(schema.stepEmbeds).values({ organizationId: user.organizationId, stepId, kind, url, label: label || url })
+  );
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function deleteStepEmbed(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const moduleId = z.string().parse(formData.get("moduleId"));
-  const d = db();
-  d.stepEmbeds = d.stepEmbeds.filter((e) => e.id !== id);
-  persist();
+  await withTenantContext(user.organizationId, (tx) => tx.delete(schema.stepEmbeds).where(and(eq(schema.stepEmbeds.organizationId, user.organizationId), eq(schema.stepEmbeds.id, id))));
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function addScript(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
-  const type = z.string().parse(formData.get("type")) as never;
+  const type = z.string().parse(formData.get("type")) as (typeof schema.scriptTypeEnum.enumValues)[number];
   const body = z.string().parse(formData.get("body"));
-  db().scripts.push({ id: newId("scr"), moduleVersionId, type, body });
-  persist();
+  await withTenantContext(user.organizationId, (tx) => tx.insert(schema.scripts).values({ organizationId: user.organizationId, moduleVersionId, type, body }));
   revalidatePath("/builder", "layout");
 }
 
 export async function deleteScript(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
-  const d = db();
-  d.scripts = d.scripts.filter((s) => s.id !== id);
-  persist();
+  await withTenantContext(user.organizationId, (tx) => tx.delete(schema.scripts).where(and(eq(schema.scripts.organizationId, user.organizationId), eq(schema.scripts.id, id))));
   revalidatePath("/builder", "layout");
 }
 
 export async function addChecklistItem(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
   const text = z.string().min(1).parse(formData.get("text"));
-  const d = db();
-  const existing = d.checklistItems.filter((c) => c.moduleVersionId === moduleVersionId);
-  d.checklistItems.push({
-    id: newId("chk"),
-    moduleVersionId,
-    text,
-    sortOrder: existing.length + 1,
-    isRequired: formData.get("isRequired") === "on",
+  await withTenantContext(user.organizationId, async (tx) => {
+    const existing = await tx
+      .select({ id: schema.checklistItems.id })
+      .from(schema.checklistItems)
+      .where(and(eq(schema.checklistItems.organizationId, user.organizationId), eq(schema.checklistItems.moduleVersionId, moduleVersionId)));
+    await tx.insert(schema.checklistItems).values({
+      organizationId: user.organizationId,
+      moduleVersionId,
+      text,
+      sortOrder: existing.length + 1,
+      isRequired: formData.get("isRequired") === "on",
+    });
   });
-  persist();
   revalidatePath("/builder", "layout");
 }
 
 export async function deleteChecklistItem(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
-  const d = db();
-  d.checklistItems = d.checklistItems.filter((c) => c.id !== id);
-  persist();
+  await withTenantContext(user.organizationId, (tx) =>
+    tx.delete(schema.checklistItems).where(and(eq(schema.checklistItems.organizationId, user.organizationId), eq(schema.checklistItems.id, id)))
+  );
   revalidatePath("/builder", "layout");
 }
 
-function getOrCreateQuiz(topicId: string) {
-  const d = db();
-  let quiz = d.quizzes.find((q) => q.topicId === topicId);
-  if (!quiz) {
-    quiz = { id: newId("quiz"), topicId, passingScore: 90 };
-    d.quizzes.push(quiz);
-  }
-  return quiz;
-}
-
 export async function addQuizQuestion(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const topicId = z.string().parse(formData.get("topicId"));
   const moduleId = z.string().parse(formData.get("moduleId"));
   const prompt = z.string().min(1).parse(formData.get("prompt"));
@@ -211,49 +227,55 @@ export async function addQuizQuestion(formData: FormData) {
   const optionTexts = [0, 1, 2, 3].map((i) => String(formData.get(`option${i}`) ?? "").trim()).filter(Boolean);
   if (optionTexts.length < 2) throw new Error("Need at least 2 options");
 
-  const quiz = getOrCreateQuiz(topicId);
-  const d = db();
-  const questionId = newId("qq");
-  d.quizQuestions.push({
-    id: questionId,
-    quizId: quiz.id,
-    prompt,
-    sortOrder: d.quizQuestions.filter((q) => q.quizId === quiz.id).length + 1,
-    options: optionTexts.map((text, i) => ({
-      id: newId("opt"),
-      questionId,
-      text,
-      isCorrect: i === correctIndex,
-      explanation: String(formData.get(`explanation${i}`) ?? ""),
-    })),
+  await withTenantContext(user.organizationId, async (tx) => {
+    const quiz = await getOrCreateQuiz(tx, user.organizationId, topicId);
+    const existingQuestions = await tx
+      .select({ id: schema.quizQuestions.id })
+      .from(schema.quizQuestions)
+      .where(and(eq(schema.quizQuestions.organizationId, user.organizationId), eq(schema.quizQuestions.quizId, quiz.id)));
+    const [question] = await tx
+      .insert(schema.quizQuestions)
+      .values({ organizationId: user.organizationId, quizId: quiz.id, prompt, sortOrder: existingQuestions.length + 1 })
+      .returning();
+    await tx.insert(schema.quizOptions).values(
+      optionTexts.map((text, i) => ({
+        organizationId: user.organizationId,
+        questionId: question.id,
+        text,
+        isCorrect: i === correctIndex,
+        explanation: String(formData.get(`explanation${i}`) ?? ""),
+      }))
+    );
   });
-  persist();
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function deleteQuizQuestion(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const moduleId = z.string().parse(formData.get("moduleId"));
-  const d = db();
-  d.quizQuestions = d.quizQuestions.filter((q) => q.id !== id);
-  persist();
+  await withTenantContext(user.organizationId, (tx) =>
+    tx.delete(schema.quizQuestions).where(and(eq(schema.quizQuestions.organizationId, user.organizationId), eq(schema.quizQuestions.id, id)))
+  );
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function updateScenario(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
   const prompt = z.string().parse(formData.get("prompt"));
-  const d = db();
-  let scenario = d.practicalScenarios.find((s) => s.moduleVersionId === moduleVersionId);
-  if (!scenario) {
-    scenario = { id: newId("scn"), moduleVersionId, prompt, kind: "simulated" };
-    d.practicalScenarios.push(scenario);
-  } else {
-    scenario.prompt = prompt;
-  }
-  persist();
+  await withTenantContext(user.organizationId, async (tx) => {
+    const existing = await tx
+      .select({ id: schema.practicalScenarios.id })
+      .from(schema.practicalScenarios)
+      .where(and(eq(schema.practicalScenarios.organizationId, user.organizationId), eq(schema.practicalScenarios.moduleVersionId, moduleVersionId)))
+      .limit(1);
+    if (existing[0]) {
+      await tx.update(schema.practicalScenarios).set({ prompt }).where(eq(schema.practicalScenarios.id, existing[0].id));
+    } else {
+      await tx.insert(schema.practicalScenarios).values({ organizationId: user.organizationId, moduleVersionId, prompt, kind: "simulated" });
+    }
+  });
   revalidatePath("/builder", "layout");
 }
 
@@ -264,65 +286,69 @@ const publishSchema = z.object({
 });
 
 export async function publishModule(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const { moduleId, changeType, changelog } = publishSchema.parse({
     moduleId: formData.get("moduleId"),
     changeType: formData.get("changeType"),
     changelog: formData.get("changelog"),
   });
-  const d = db();
-  const user = await getCurrentUser();
-  const mod = d.modules.find((m) => m.id === moduleId);
-  const mv = d.moduleVersions.find((v) => v.moduleId === moduleId);
-  if (!mod || !mv) throw new Error("Module not found");
 
-  const completeness = moduleCompleteness(mv.id);
+  const [mv] = await withTenantContext(user.organizationId, (tx) =>
+    tx.select().from(schema.moduleVersions).where(and(eq(schema.moduleVersions.organizationId, user.organizationId), eq(schema.moduleVersions.moduleId, moduleId))).limit(1)
+  );
+  if (!mv) throw new Error("Module not found");
+
+  const completeness = await moduleCompleteness(user.organizationId, mv.id);
   if (!completeness.publishable) throw new Error("Module is not complete enough to publish");
 
-  const wasPublished = mod.status === "published";
-  const newVersion = wasPublished ? mv.version + 1 : 1;
-  mv.version = newVersion;
-  mv.changeType = changeType;
-  mv.publishedBy = user.id;
-  mv.publishedAt = new Date().toISOString();
-  mv.changelog = changelog;
-  mv.isDraft = false;
-  mod.status = "published";
-  mod.currentVersion = newVersion;
+  await withTenantContext(user.organizationId, async (tx) => {
+    const [mod] = await tx.select().from(schema.modules).where(and(eq(schema.modules.organizationId, user.organizationId), eq(schema.modules.id, moduleId))).limit(1);
+    if (!mod) throw new Error("Module not found");
 
-  if (wasPublished && changeType === "material") {
-    for (const cert of d.certifications.filter((c) => c.moduleId === moduleId && c.status === "certified")) {
-      logCertEvent(cert.id, cert.status, "needs_retraining", user.id, `Module republished as v${newVersion} (material change) — retraining required.`);
-      cert.status = "needs_retraining";
+    const wasPublished = mod.status === "published";
+    const newVersion = wasPublished ? mv.version + 1 : 1;
+    await tx
+      .update(schema.moduleVersions)
+      .set({ version: newVersion, changeType, publishedBy: user.id, publishedAt: new Date(), changelog, isDraft: false })
+      .where(eq(schema.moduleVersions.id, mv.id));
+    await tx.update(schema.modules).set({ status: "published", currentVersion: newVersion }).where(eq(schema.modules.id, moduleId));
+
+    if (wasPublished && changeType === "material") {
+      const certified = await tx
+        .select()
+        .from(schema.certifications)
+        .where(and(eq(schema.certifications.organizationId, user.organizationId), eq(schema.certifications.moduleId, moduleId), eq(schema.certifications.status, "certified")));
+      for (const cert of certified) {
+        await logCertEvent(tx, user.organizationId, cert.id, cert.status, "needs_retraining", user.id, `Module republished as v${newVersion} (material change) — retraining required.`);
+        await tx.update(schema.certifications).set({ status: "needs_retraining" }).where(eq(schema.certifications.id, cert.id));
+      }
     }
+  });
+
+  // Best-effort: the AI knowledge chat should reflect the newly published content, but a
+  // reindex failure (e.g. no ANTHROPIC_API_KEY configured yet) shouldn't block publishing itself.
+  try {
+    await reindexModule(user.organizationId, moduleId);
+  } catch (err) {
+    console.error(`Knowledge chat reindex failed for module ${moduleId}:`, err);
   }
-  persist();
+
   revalidatePath("/builder", "layout");
   revalidatePath("/matrix");
 }
 
 // ---------------- Learner flow ----------------
 
-function getOrCreateCert(userId: string, moduleId: string) {
-  const d = db();
-  let cert = d.certifications.find((c) => c.userId === userId && c.moduleId === moduleId);
-  if (!cert) {
-    cert = { id: newId("cert"), userId, moduleId, status: "not_started", moduleVersion: null, certifiedBy: null, certifiedAt: null, expiresAt: null, notes: "" };
-    d.certifications.push(cert);
-    logCertEvent(cert.id, null, "not_started", userId, "Assigned.");
-  }
-  return cert;
-}
-
 export async function startTraining(formData: FormData) {
   const moduleId = z.string().parse(formData.get("moduleId"));
-  const user = await getCurrentUser();
-  const cert = getOrCreateCert(user.id, moduleId);
-  if (cert.status === "not_started") {
-    logCertEvent(cert.id, cert.status, "training", user.id, "Opened module content.");
-    cert.status = "training";
-    persist();
-  }
+  const user = await requireCurrentUser();
+  await withTenantContext(user.organizationId, async (tx) => {
+    const cert = await getOrCreateCert(tx, user.organizationId, user.id, moduleId);
+    if (cert.status === "not_started") {
+      await logCertEvent(tx, user.organizationId, cert.id, cert.status, "training", user.id, "Opened module content.");
+      await tx.update(schema.certifications).set({ status: "training" }).where(eq(schema.certifications.id, cert.id));
+    }
+  });
   revalidatePath(`/learn/${moduleId}`);
   revalidatePath("/matrix");
 }
@@ -331,20 +357,30 @@ export async function completeStep(formData: FormData) {
   const stepId = z.string().parse(formData.get("stepId"));
   const moduleId = z.string().parse(formData.get("moduleId"));
   const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
-  const user = await getCurrentUser();
-  const d = db();
-  if (!d.stepProgress.some((p) => p.userId === user.id && p.stepId === stepId)) {
-    d.stepProgress.push({ id: newId("progress"), userId: user.id, stepId, completedAt: new Date().toISOString() });
-  }
-  const cert = getOrCreateCert(user.id, moduleId);
-  const steps = orderedSteps(moduleVersionId);
-  const done = new Set(d.stepProgress.filter((p) => p.userId === user.id).map((p) => p.stepId));
-  const allStepsDone = steps.length > 0 && steps.every((s) => done.has(s.id));
-  if (allStepsDone && cert.status === "training") {
-    logCertEvent(cert.id, cert.status, "ready_for_test", user.id, "Reviewed all topics and steps.");
-    cert.status = "ready_for_test";
-  }
-  persist();
+  const user = await requireCurrentUser();
+
+  const steps = await orderedSteps(user.organizationId, moduleVersionId);
+
+  await withTenantContext(user.organizationId, async (tx) => {
+    const already = await tx
+      .select({ id: schema.stepProgress.id })
+      .from(schema.stepProgress)
+      .where(and(eq(schema.stepProgress.organizationId, user.organizationId), eq(schema.stepProgress.userId, user.id), eq(schema.stepProgress.stepId, stepId)))
+      .limit(1);
+    if (already.length === 0) {
+      await tx.insert(schema.stepProgress).values({ organizationId: user.organizationId, userId: user.id, stepId });
+    }
+
+    const cert = await getOrCreateCert(tx, user.organizationId, user.id, moduleId);
+    const doneRows = await tx.select({ stepId: schema.stepProgress.stepId }).from(schema.stepProgress).where(and(eq(schema.stepProgress.organizationId, user.organizationId), eq(schema.stepProgress.userId, user.id)));
+    const done = new Set(doneRows.map((r) => r.stepId));
+    const allStepsDone = steps.length > 0 && steps.every((s) => done.has(s.id));
+    if (allStepsDone && cert.status === "training") {
+      await logCertEvent(tx, user.organizationId, cert.id, cert.status, "ready_for_test", user.id, "Reviewed all topics and steps.");
+      await tx.update(schema.certifications).set({ status: "ready_for_test" }).where(eq(schema.certifications.id, cert.id));
+    }
+  });
+
   revalidatePath(`/learn/${moduleId}`);
   revalidatePath("/matrix");
 }
@@ -357,45 +393,45 @@ export async function submitQuizAttempt(formData: FormData) {
     moduleId: formData.get("moduleId"),
     moduleVersion: formData.get("moduleVersion"),
   });
-  const d = db();
-  const user = await getCurrentUser();
-  const quiz = d.quizzes.find((q) => q.id === quizId);
-  if (!quiz) throw new Error("Quiz not found");
-  const questions = d.quizQuestions.filter((q) => q.quizId === quizId);
+  const user = await requireCurrentUser();
 
-  const answers: Record<string, string> = {};
-  let correct = 0;
-  for (const question of questions) {
-    const chosen = String(formData.get(`answer_${question.id}`) ?? "");
-    answers[question.id] = chosen;
-    if (question.options.find((o) => o.id === chosen)?.isCorrect) correct++;
-  }
-  const score = questions.length ? Math.round((correct / questions.length) * 100) : 0;
-  const passed = score >= quiz.passingScore;
+  await withTenantContext(user.organizationId, async (tx) => {
+    const [quiz] = await tx.select().from(schema.quizzes).where(and(eq(schema.quizzes.organizationId, user.organizationId), eq(schema.quizzes.id, quizId))).limit(1);
+    if (!quiz) throw new Error("Quiz not found");
+    const questions = await tx.select().from(schema.quizQuestions).where(and(eq(schema.quizQuestions.organizationId, user.organizationId), eq(schema.quizQuestions.quizId, quizId)));
+    const options = await tx.select().from(schema.quizOptions).where(eq(schema.quizOptions.organizationId, user.organizationId));
+    const optionsByQuestion = new Map<string, typeof options>();
+    for (const o of options) {
+      if (!optionsByQuestion.has(o.questionId)) optionsByQuestion.set(o.questionId, []);
+      optionsByQuestion.get(o.questionId)!.push(o);
+    }
 
-  d.quizAttempts.push({
-    id: newId("attempt"),
-    userId: user.id,
-    quizId,
-    moduleVersion,
-    score,
-    passed,
-    answers,
-    startedAt: new Date().toISOString(),
-    submittedAt: new Date().toISOString(),
+    const answers: Record<string, string> = {};
+    let correct = 0;
+    for (const question of questions) {
+      const chosen = String(formData.get(`answer_${question.id}`) ?? "");
+      answers[question.id] = chosen;
+      if ((optionsByQuestion.get(question.id) ?? []).find((o) => o.id === chosen)?.isCorrect) correct++;
+    }
+    const score = questions.length ? Math.round((correct / questions.length) * 100) : 0;
+    const passed = score >= quiz.passingScore;
+
+    await tx.insert(schema.quizAttempts).values({ organizationId: user.organizationId, userId: user.id, quizId, moduleVersion, score, passed, answers });
+
+    const [mod] = await tx.select().from(schema.modules).where(and(eq(schema.modules.organizationId, user.organizationId), eq(schema.modules.id, moduleId))).limit(1);
+    const [mv] = mod
+      ? await tx.select().from(schema.moduleVersions).where(and(eq(schema.moduleVersions.organizationId, user.organizationId), eq(schema.moduleVersions.moduleId, mod.id))).limit(1)
+      : [];
+    const cert = await getOrCreateCert(tx, user.organizationId, user.id, moduleId);
+    if (mv && (await allModuleQuizzesPassed(user.organizationId, user.id, mv.id))) {
+      await logCertEvent(tx, user.organizationId, cert.id, cert.status, "tested_passed", user.id, `Passed every knowledge check (latest: ${score}%).`);
+      await tx.update(schema.certifications).set({ status: "tested_passed" }).where(eq(schema.certifications.id, cert.id));
+    } else if (!passed) {
+      await logCertEvent(tx, user.organizationId, cert.id, cert.status, "tested_failed", user.id, `Quiz attempt scored ${score}% (passing ${quiz.passingScore}%).`);
+      await tx.update(schema.certifications).set({ status: "tested_failed" }).where(eq(schema.certifications.id, cert.id));
+    }
   });
 
-  const mod = d.modules.find((m) => m.id === moduleId);
-  const mv = mod ? d.moduleVersions.find((v) => v.moduleId === mod.id) : undefined;
-  const cert = getOrCreateCert(user.id, moduleId);
-  if (mv && allModuleQuizzesPassed(user.id, mv.id)) {
-    logCertEvent(cert.id, cert.status, "tested_passed", user.id, `Passed every knowledge check (latest: ${score}%).`);
-    cert.status = "tested_passed";
-  } else if (!passed) {
-    logCertEvent(cert.id, cert.status, "tested_failed", user.id, `Quiz attempt scored ${score}% (passing ${quiz.passingScore}%).`);
-    cert.status = "tested_failed";
-  }
-  persist();
   revalidatePath(`/learn/${moduleId}`);
   revalidatePath("/matrix");
   revalidatePath("/certify");
@@ -412,7 +448,7 @@ const evalSchema = z.object({
 });
 
 export async function submitPracticalEvaluation(formData: FormData) {
-  await requireStaff();
+  const evaluator = await requireStaff();
   const parsed = evalSchema.parse({
     userId: formData.get("userId"),
     moduleId: formData.get("moduleId"),
@@ -420,116 +456,98 @@ export async function submitPracticalEvaluation(formData: FormData) {
     notes: formData.get("notes"),
     result: formData.get("result"),
   });
-  const evaluator = await getCurrentUser();
-  const d = db();
   const rubricScores = {} as Record<RubricKey, number>;
   for (const key of ["speed", "accuracy", "communication", "documentation", "scheduling", "escalation"] as RubricKey[]) {
     rubricScores[key] = Number(formData.get(`rubric_${key}`) ?? 0);
   }
-  d.practicalEvaluations.push({
-    id: newId("eval"),
-    userId: parsed.userId,
-    scenarioId: parsed.scenarioId,
-    evaluatorId: evaluator.id,
-    rubricScores,
-    result: parsed.result,
-    notes: parsed.notes,
-    evaluatedAt: new Date().toISOString(),
-  });
-  persist();
+  await withTenantContext(evaluator.organizationId, (tx) =>
+    tx.insert(schema.practicalEvaluations).values({
+      organizationId: evaluator.organizationId,
+      userId: parsed.userId,
+      scenarioId: parsed.scenarioId,
+      evaluatorId: evaluator.id,
+      rubricScores,
+      result: parsed.result,
+      notes: parsed.notes,
+    })
+  );
   revalidatePath("/certify");
 }
 
 const certifySchema = z.object({ userId: z.string(), moduleId: z.string(), notes: z.string() });
 
 export async function certifyUser(formData: FormData) {
-  await requireStaff();
+  const approver = await requireStaff();
   const { userId, moduleId, notes } = certifySchema.parse({
     userId: formData.get("userId"),
     moduleId: formData.get("moduleId"),
     notes: formData.get("notes"),
   });
-  const d = db();
-  const approver = await getCurrentUser();
-  const mod = d.modules.find((m) => m.id === moduleId);
-  if (!mod) throw new Error("Module not found");
-  const cert = getOrCreateCert(userId, moduleId);
-  const now = new Date();
-  const expires = new Date(now);
-  expires.setFullYear(expires.getFullYear() + 1);
 
-  logCertEvent(cert.id, cert.status, "certified", approver.id, notes || "Certified after passing quiz and practical evaluation.");
-  cert.status = "certified";
-  cert.moduleVersion = mod.currentVersion;
-  cert.certifiedBy = approver.id;
-  cert.certifiedAt = now.toISOString();
-  cert.expiresAt = expires.toISOString();
-  cert.notes = notes;
-  persist();
+  const certId = await withTenantContext(approver.organizationId, async (tx) => {
+    const [mod] = await tx.select().from(schema.modules).where(and(eq(schema.modules.organizationId, approver.organizationId), eq(schema.modules.id, moduleId))).limit(1);
+    if (!mod) throw new Error("Module not found");
+    const cert = await getOrCreateCert(tx, approver.organizationId, userId, moduleId);
+    const now = new Date();
+    const expires = new Date(now);
+    expires.setFullYear(expires.getFullYear() + 1);
+
+    await logCertEvent(tx, approver.organizationId, cert.id, cert.status, "certified", approver.id, notes || "Certified after passing quiz and practical evaluation.");
+    await tx
+      .update(schema.certifications)
+      .set({ status: "certified", moduleVersion: mod.currentVersion, certifiedBy: approver.id, certifiedAt: now, expiresAt: expires, notes })
+      .where(eq(schema.certifications.id, cert.id));
+    return cert.id;
+  });
+
   revalidatePath("/certify");
   revalidatePath("/matrix");
-  revalidatePath(`/cert/${cert.id}`);
+  revalidatePath(`/cert/${certId}`);
 }
 
 // ---------------- People (admin) ----------------
-
-async function requireAdmin() {
-  const user = await getCurrentUser();
-  if (!user.isAdmin) throw new Error("Admin access required");
-  return user;
-}
-
-function autoAssignForRole(userId: string, roleId: string, assignedBy: string) {
-  const d = db();
-  const requirements = d.roleModuleRequirements.filter((r) => r.roleId === roleId && r.isRequired);
-  for (const req of requirements) {
-    const already = d.assignments.some((a) => a.userId === userId && a.moduleId === req.moduleId);
-    if (!already) {
-      d.assignments.push({
-        id: newId("asn"),
-        userId,
-        moduleId: req.moduleId,
-        assignedBy,
-        assignedAt: new Date().toISOString(),
-        dueAt: null,
-        source: "auto",
-      });
-    }
-  }
-}
 
 const createUserSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   roleId: z.string(),
+  accessRole: z.enum(["admin", "editor", "learner"]),
 });
 
 export async function createUser(formData: FormData) {
   const admin = await requireAdmin();
-  const { name, email, roleId } = createUserSchema.parse({
+  const { name, email, roleId, accessRole } = createUserSchema.parse({
     name: formData.get("name"),
     email: formData.get("email"),
     roleId: formData.get("roleId"),
+    accessRole: formData.get("accessRole") || "learner",
   });
-  const d = db();
-  if (d.users.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
-    throw new Error("A person with that email already exists");
-  }
-  const id = newId("u");
-  d.users.push({
-    id,
-    name,
-    email,
-    roleId,
-    isAdmin: formData.get("isAdmin") === "on",
-    isManager: formData.get("isManager") === "on",
-    employmentStatus: "active",
-    hiredAt: new Date().toISOString(),
+
+  const newUserId = await withTenantContext(admin.organizationId, async (tx) => {
+    const existing = await tx
+      .select({ id: schema.profiles.id })
+      .from(schema.profiles)
+      .where(and(eq(schema.profiles.organizationId, admin.organizationId), eq(schema.profiles.email, email.toLowerCase())))
+      .limit(1);
+    if (existing.length > 0) throw new Error("A person with that email already exists");
+
+    const [created] = await tx
+      .insert(schema.profiles)
+      .values({
+        organizationId: admin.organizationId,
+        name,
+        email: email.toLowerCase(),
+        roleId,
+        accessRole,
+        employmentStatus: "active",
+      })
+      .returning();
+    await autoAssignForRole(tx, admin.organizationId, created.id, roleId, admin.id);
+    return created.id;
   });
-  autoAssignForRole(id, roleId, admin.id);
-  persist();
+
   revalidatePath("/people");
-  redirect(`/people/${id}`);
+  redirect(`/people/${newUserId}`);
 }
 
 const updateUserSchema = z.object({
@@ -537,61 +555,64 @@ const updateUserSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   roleId: z.string(),
+  accessRole: z.enum(["admin", "editor", "learner"]),
 });
 
 export async function updateUser(formData: FormData) {
   const admin = await requireAdmin();
-  const { id, name, email, roleId } = updateUserSchema.parse({
+  const { id, name, email, roleId, accessRole } = updateUserSchema.parse({
     id: formData.get("id"),
     name: formData.get("name"),
     email: formData.get("email"),
     roleId: formData.get("roleId"),
+    accessRole: formData.get("accessRole") || "learner",
   });
-  const d = db();
-  const user = d.users.find((u) => u.id === id);
-  if (!user) throw new Error("User not found");
-  const roleChanged = user.roleId !== roleId;
-  user.name = name;
-  user.email = email;
-  user.roleId = roleId;
-  user.isAdmin = formData.get("isAdmin") === "on";
-  user.isManager = formData.get("isManager") === "on";
-  if (roleChanged) autoAssignForRole(id, roleId, admin.id);
-  persist();
+
+  await withTenantContext(admin.organizationId, async (tx) => {
+    const [existingUser] = await tx.select().from(schema.profiles).where(and(eq(schema.profiles.organizationId, admin.organizationId), eq(schema.profiles.id, id))).limit(1);
+    if (!existingUser) throw new Error("User not found");
+    const roleChanged = existingUser.roleId !== roleId;
+
+    await tx
+      .update(schema.profiles)
+      .set({ name, email: email.toLowerCase(), roleId, accessRole })
+      .where(eq(schema.profiles.id, id));
+
+    if (roleChanged) await autoAssignForRole(tx, admin.organizationId, id, roleId, admin.id);
+  });
+
   revalidatePath("/people");
   revalidatePath(`/people/${id}`);
 }
 
 export async function setUserActive(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const id = z.string().parse(formData.get("id"));
   const active = formData.get("active") === "true";
-  const d = db();
-  const user = d.users.find((u) => u.id === id);
-  if (!user) throw new Error("User not found");
-  user.employmentStatus = active ? "active" : "inactive";
-  persist();
+  await withTenantContext(admin.organizationId, async (tx) => {
+    const result = await tx
+      .update(schema.profiles)
+      .set({ employmentStatus: active ? "active" : "inactive" })
+      .where(and(eq(schema.profiles.organizationId, admin.organizationId), eq(schema.profiles.id, id)))
+      .returning({ id: schema.profiles.id });
+    if (result.length === 0) throw new Error("User not found");
+  });
   revalidatePath("/people");
   revalidatePath(`/people/${id}`);
 }
 
 export async function deleteUser(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const id = z.string().parse(formData.get("id"));
-  const d = db();
-  const user = d.users.find((u) => u.id === id);
-  if (!user) throw new Error("User not found");
-
-  const certIds = new Set(d.certifications.filter((c) => c.userId === id).map((c) => c.id));
-  d.certificationEvents = d.certificationEvents.filter((e) => !certIds.has(e.certificationId));
-  d.certifications = d.certifications.filter((c) => c.userId !== id);
-  d.assignments = d.assignments.filter((a) => a.userId !== id);
-  d.quizAttempts = d.quizAttempts.filter((a) => a.userId !== id);
-  d.practicalEvaluations = d.practicalEvaluations.filter((e) => e.userId !== id && e.evaluatorId !== id);
-  d.stepProgress = d.stepProgress.filter((p) => p.userId !== id);
-  d.groupMembers = d.groupMembers.filter((m) => m.userId !== id);
-  d.users = d.users.filter((u) => u.id !== id);
-  persist();
+  await withTenantContext(admin.organizationId, async (tx) => {
+    // Everything else (certifications, assignments, quiz attempts, group memberships, step
+    // progress, evaluations they gave, AI roleplay sessions) cascades via FK ON DELETE — see
+    // src/lib/drizzle/schema.ts. Records where this person was only referenced as an approver
+    // (certifiedBy, actorId, assignedBy, publishedBy) keep that history but lose the attribution
+    // (ON DELETE SET NULL), rather than being deleted.
+    const result = await tx.delete(schema.profiles).where(and(eq(schema.profiles.organizationId, admin.organizationId), eq(schema.profiles.id, id))).returning({ id: schema.profiles.id });
+    if (result.length === 0) throw new Error("User not found");
+  });
   revalidatePath("/people");
   redirect("/people");
 }
@@ -605,20 +626,20 @@ const roleSchema = z.object({
 });
 
 export async function createRole(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const { name, description, parentRoleId } = roleSchema.parse({
     name: formData.get("name"),
     description: formData.get("description"),
     parentRoleId: formData.get("parentRoleId") || undefined,
   });
-  const d = db();
-  d.roles.push({ id: newId("role"), name, description, parentRoleId: parentRoleId ?? null });
-  persist();
+  await withTenantContext(admin.organizationId, (tx) =>
+    tx.insert(schema.roles).values({ organizationId: admin.organizationId, name, description, parentRoleId: parentRoleId ?? null })
+  );
   revalidatePath("/people/roles");
 }
 
 export async function updateRole(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const id = z.string().parse(formData.get("id"));
   const { name, description, parentRoleId } = roleSchema.parse({
     name: formData.get("name"),
@@ -626,71 +647,79 @@ export async function updateRole(formData: FormData) {
     parentRoleId: formData.get("parentRoleId") || undefined,
   });
   if (parentRoleId === id) throw new Error("A role cannot be its own parent");
-  const d = db();
-  const role = d.roles.find((r) => r.id === id);
-  if (!role) throw new Error("Role not found");
-  role.name = name;
-  role.description = description;
-  role.parentRoleId = parentRoleId ?? null;
-  persist();
+  await withTenantContext(admin.organizationId, async (tx) => {
+    const result = await tx
+      .update(schema.roles)
+      .set({ name, description, parentRoleId: parentRoleId ?? null })
+      .where(and(eq(schema.roles.organizationId, admin.organizationId), eq(schema.roles.id, id)))
+      .returning({ id: schema.roles.id });
+    if (result.length === 0) throw new Error("Role not found");
+  });
   revalidatePath("/people/roles");
 }
 
 export async function addResponsibility(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const roleId = z.string().parse(formData.get("roleId"));
   const title = z.string().min(1).parse(formData.get("title"));
-  const d = db();
-  const existing = d.responsibilities.filter((r) => r.roleId === roleId);
-  d.responsibilities.push({ id: newId("resp"), roleId, title, sortOrder: existing.length + 1 });
-  persist();
+  await withTenantContext(admin.organizationId, async (tx) => {
+    const existing = await tx
+      .select({ id: schema.responsibilities.id })
+      .from(schema.responsibilities)
+      .where(and(eq(schema.responsibilities.organizationId, admin.organizationId), eq(schema.responsibilities.roleId, roleId)));
+    await tx.insert(schema.responsibilities).values({ organizationId: admin.organizationId, roleId, title, sortOrder: existing.length + 1 });
+  });
   revalidatePath("/people/roles");
 }
 
 export async function deleteResponsibility(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const id = z.string().parse(formData.get("id"));
-  const d = db();
-  d.responsibilities = d.responsibilities.filter((r) => r.id !== id);
-  persist();
+  await withTenantContext(admin.organizationId, (tx) =>
+    tx.delete(schema.responsibilities).where(and(eq(schema.responsibilities.organizationId, admin.organizationId), eq(schema.responsibilities.id, id)))
+  );
   revalidatePath("/people/roles");
 }
 
 // ---------------- Groups ----------------
 
 export async function createGroup(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const name = z.string().min(1).parse(formData.get("name"));
   const description = z.string().parse(formData.get("description"));
-  const d = db();
-  const id = newId("group");
-  d.groups.push({ id, name, description });
-  persist();
+  const [group] = await withTenantContext(admin.organizationId, (tx) =>
+    tx.insert(schema.groups).values({ organizationId: admin.organizationId, name, description }).returning()
+  );
   revalidatePath("/groups");
-  redirect(`/groups/${id}`);
+  redirect(`/groups/${group.id}`);
 }
 
 export async function addGroupMember(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const groupId = z.string().parse(formData.get("groupId"));
   const userId = z.string().parse(formData.get("userId"));
-  const d = db();
-  const already = d.groupMembers.some((m) => m.groupId === groupId && m.userId === userId);
-  if (!already) {
-    d.groupMembers.push({ id: newId("gm"), groupId, userId });
-    persist();
-  }
+  await withTenantContext(admin.organizationId, async (tx) => {
+    const already = await tx
+      .select({ id: schema.groupMembers.id })
+      .from(schema.groupMembers)
+      .where(and(eq(schema.groupMembers.organizationId, admin.organizationId), eq(schema.groupMembers.groupId, groupId), eq(schema.groupMembers.userId, userId)))
+      .limit(1);
+    if (already.length === 0) {
+      await tx.insert(schema.groupMembers).values({ organizationId: admin.organizationId, groupId, userId });
+    }
+  });
   revalidatePath(`/groups/${groupId}`);
 }
 
 export async function removeGroupMember(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const id = z.string().parse(formData.get("id"));
-  const d = db();
-  const member = d.groupMembers.find((m) => m.id === id);
-  d.groupMembers = d.groupMembers.filter((m) => m.id !== id);
-  persist();
-  if (member) revalidatePath(`/groups/${member.groupId}`);
+  const groupId = await withTenantContext(admin.organizationId, async (tx) => {
+    const [member] = await tx.select({ groupId: schema.groupMembers.groupId }).from(schema.groupMembers).where(and(eq(schema.groupMembers.organizationId, admin.organizationId), eq(schema.groupMembers.id, id))).limit(1);
+    await tx.delete(schema.groupMembers).where(and(eq(schema.groupMembers.organizationId, admin.organizationId), eq(schema.groupMembers.id, id)));
+    return member?.groupId;
+  });
+  if (groupId) revalidatePath(`/groups/${groupId}`);
 }
 
 // ---------------- Content creation ----------------
@@ -702,44 +731,40 @@ const createModuleSchema = z.object({
 });
 
 export async function createModule(formData: FormData) {
-  const user = await getCurrentUser();
-  if (!(user.isAdmin || user.isManager)) throw new Error("Not authorized to create content");
+  const user = await requireCurrentUser();
+  if (!(user.accessRole === "admin" || user.accessRole === "editor")) throw new Error("Not authorized to create content");
   const { title, phase, templateKey } = createModuleSchema.parse({
     title: formData.get("title"),
     phase: formData.get("phase") || 1,
     templateKey: formData.get("templateKey") || undefined,
   });
-  const d = db();
-  const moduleId = newId("mod");
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-  d.modules.push({
-    id: moduleId,
-    title,
-    slug,
-    phase,
-    ownerId: user.id,
-    currentVersion: 0,
-    status: "draft",
-    estimatedMinutes: 15,
-    createdAt: new Date().toISOString(),
+
+  const moduleId = await withTenantContext(user.organizationId, async (tx) => {
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    const [mod] = await tx
+      .insert(schema.modules)
+      .values({ organizationId: user.organizationId, title, slug, phase, ownerId: user.id, currentVersion: 0, status: "draft", estimatedMinutes: 15 })
+      .returning();
+    const [mv] = await tx
+      .insert(schema.moduleVersions)
+      .values({
+        organizationId: user.organizationId,
+        moduleId: mod.id,
+        version: 0,
+        changelog: templateKey ? `Started from the "${templateKey}" template.` : "",
+        isDraft: true,
+      })
+      .returning();
+    for (let i = 0; i < STARTER_OUTLINE.length; i++) {
+      const [topic] = await tx
+        .insert(schema.topics)
+        .values({ organizationId: user.organizationId, moduleVersionId: mv.id, title: STARTER_OUTLINE[i], sortOrder: i + 1 })
+        .returning();
+      await tx.insert(schema.steps).values({ organizationId: user.organizationId, topicId: topic.id, title: "Overview", body: "", sortOrder: 1 });
+    }
+    return mod.id;
   });
-  const moduleVersionId = newId("mv");
-  d.moduleVersions.push({
-    id: moduleVersionId,
-    moduleId,
-    version: 0,
-    changeType: null,
-    publishedBy: null,
-    publishedAt: null,
-    changelog: templateKey ? `Started from the "${templateKey}" template.` : "",
-    isDraft: true,
-  });
-  for (const topicTitle of STARTER_OUTLINE) {
-    const topicId = newId("topic");
-    d.topics.push({ id: topicId, moduleVersionId, title: topicTitle, sortOrder: d.topics.filter((t) => t.moduleVersionId === moduleVersionId).length + 1 });
-    d.steps.push({ id: newId("step"), topicId, title: "Overview", body: "", sortOrder: 1 });
-  }
-  persist();
+
   revalidatePath("/builder");
   redirect(`/builder/${moduleId}`);
 }
@@ -747,7 +772,7 @@ export async function createModule(formData: FormData) {
 // ---------------- Content Blocks ----------------
 
 export async function addContentBlock(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const stepId = z.string().parse(formData.get("stepId"));
   const moduleId = z.string().parse(formData.get("moduleId"));
   const type = z.enum(["text", "callout", "video", "audio", "file", "checklist"]).parse(formData.get("type"));
@@ -758,29 +783,27 @@ export async function addContentBlock(formData: FormData) {
   const fileSize = String(formData.get("fileSize") || "").trim();
   const fileFormat = String(formData.get("fileFormat") || "").trim();
 
-  const d = db();
-  if (!d.contentBlocks) d.contentBlocks = [];
-  const existing = d.contentBlocks.filter((b) => b.stepId === stepId);
-
-  d.contentBlocks.push({
-    id: newId("cb"),
-    stepId,
-    type,
-    sortOrder: existing.length + 1,
-    title: title || undefined,
-    body: body || undefined,
-    mediaUrl: mediaUrl || undefined,
-    calloutType: type === "callout" ? calloutType : undefined,
-    fileSize: fileSize || undefined,
-    fileFormat: fileFormat || undefined,
+  await withTenantContext(user.organizationId, async (tx) => {
+    const existing = await tx.select({ id: schema.contentBlocks.id }).from(schema.contentBlocks).where(and(eq(schema.contentBlocks.organizationId, user.organizationId), eq(schema.contentBlocks.stepId, stepId)));
+    await tx.insert(schema.contentBlocks).values({
+      organizationId: user.organizationId,
+      stepId,
+      type,
+      sortOrder: existing.length + 1,
+      title: title || null,
+      body: body || null,
+      mediaUrl: mediaUrl || null,
+      calloutType: type === "callout" ? calloutType : null,
+      fileSize: fileSize || null,
+      fileFormat: fileFormat || null,
+    });
   });
 
-  persist();
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function updateContentBlock(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const moduleId = z.string().parse(formData.get("moduleId"));
   const title = String(formData.get("title") || "").trim();
@@ -790,35 +813,39 @@ export async function updateContentBlock(formData: FormData) {
   const fileSize = String(formData.get("fileSize") || "").trim();
   const fileFormat = String(formData.get("fileFormat") || "").trim();
 
-  const d = db();
-  const block = (d.contentBlocks || []).find((b) => b.id === id);
-  if (!block) throw new Error("Block not found");
+  await withTenantContext(user.organizationId, async (tx) => {
+    const result = await tx
+      .update(schema.contentBlocks)
+      .set({
+        title: title || null,
+        body: body || null,
+        mediaUrl: mediaUrl || null,
+        ...(calloutType ? { calloutType } : {}),
+        fileSize: fileSize || null,
+        fileFormat: fileFormat || null,
+      })
+      .where(and(eq(schema.contentBlocks.organizationId, user.organizationId), eq(schema.contentBlocks.id, id)))
+      .returning({ id: schema.contentBlocks.id });
+    if (result.length === 0) throw new Error("Block not found");
+  });
 
-  block.title = title || undefined;
-  block.body = body || undefined;
-  block.mediaUrl = mediaUrl || undefined;
-  if (calloutType) block.calloutType = calloutType;
-  block.fileSize = fileSize || undefined;
-  block.fileFormat = fileFormat || undefined;
-
-  persist();
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function deleteContentBlock(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const moduleId = z.string().parse(formData.get("moduleId"));
-  const d = db();
-  d.contentBlocks = (d.contentBlocks || []).filter((b) => b.id !== id);
-  persist();
+  await withTenantContext(user.organizationId, (tx) =>
+    tx.delete(schema.contentBlocks).where(and(eq(schema.contentBlocks.organizationId, user.organizationId), eq(schema.contentBlocks.id, id)))
+  );
   revalidatePath(`/builder/${moduleId}`);
 }
 
 // ---------------- AI Roleplay Scenarios (Builder) ----------------
 
 export async function createAiScenario(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const moduleVersionId = z.string().parse(formData.get("moduleVersionId"));
   const moduleId = z.string().parse(formData.get("moduleId"));
   const title = z.string().min(1).parse(formData.get("title"));
@@ -829,52 +856,47 @@ export async function createAiScenario(formData: FormData) {
   const initialMessage = z.string().min(1).parse(formData.get("initialMessage"));
   const maxTurns = Number(formData.get("maxTurns") || 5);
   const passingScore = Number(formData.get("passingScore") || 80);
-  const topicId = String(formData.get("topicId") || "") || undefined;
+  const topicId = String(formData.get("topicId") || "") || null;
 
-  const d = db();
-  if (!d.aiRoleplayScenarios) d.aiRoleplayScenarios = [];
-  d.aiRoleplayScenarios.push({
-    id: newId("ai-scen"),
-    moduleVersionId,
-    topicId,
-    title,
-    description,
-    customerPersona,
-    systemPrompt,
-    rubricPrompt,
-    initialMessage,
-    maxTurns,
-    passingScore,
-  });
+  await withTenantContext(user.organizationId, (tx) =>
+    tx.insert(schema.aiRoleplayScenarios).values({
+      organizationId: user.organizationId,
+      moduleVersionId,
+      topicId,
+      title,
+      description,
+      customerPersona,
+      systemPrompt,
+      rubricPrompt,
+      initialMessage,
+      maxTurns,
+      passingScore,
+    })
+  );
 
-  persist();
   revalidatePath(`/builder/${moduleId}`);
 }
 
 export async function deleteAiScenario(formData: FormData) {
-  await requireStaff();
+  const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const moduleId = z.string().parse(formData.get("moduleId"));
-  const d = db();
-  d.aiRoleplayScenarios = (d.aiRoleplayScenarios || []).filter((s) => s.id !== id);
-  d.aiRoleplaySessions = (d.aiRoleplaySessions || []).filter((s) => s.scenarioId !== id);
-  persist();
+  await withTenantContext(user.organizationId, (tx) =>
+    tx.delete(schema.aiRoleplayScenarios).where(and(eq(schema.aiRoleplayScenarios.organizationId, user.organizationId), eq(schema.aiRoleplayScenarios.id, id)))
+  );
   revalidatePath(`/builder/${moduleId}`);
 }
 
 // ---------------- AI Roleplay Turn Execution (Learner) ----------------
 
-export async function submitRoleplayTurnAction(params: {
-  scenarioId: string;
-  history: AiRoleplayMessage[];
-  userMessage: string;
-}) {
-  const d = db();
-  const scenario = (d.aiRoleplayScenarios || []).find((s) => s.id === params.scenarioId);
+export async function submitRoleplayTurnAction(params: { scenarioId: string; history: AiRoleplayMessage[]; userMessage: string }) {
+  const user = await requireCurrentUser();
+  const [scenario] = await withTenantContext(user.organizationId, (tx) =>
+    tx.select().from(schema.aiRoleplayScenarios).where(and(eq(schema.aiRoleplayScenarios.organizationId, user.organizationId), eq(schema.aiRoleplayScenarios.id, params.scenarioId))).limit(1)
+  );
   if (!scenario) throw new Error("Scenario not found");
 
-  const result = await processRoleplayTurn(scenario, params.history, params.userMessage);
-  return result;
+  return processRoleplayTurn(scenario, params.history, params.userMessage);
 }
 
 export async function saveRoleplaySessionAction(params: {
@@ -882,32 +904,32 @@ export async function saveRoleplaySessionAction(params: {
   messages: AiRoleplayMessage[];
   score?: number;
   passed?: boolean;
-  feedback?: {
-    summary: string;
-    strengths: string[];
-    improvements: string[];
-    scriptAdherence: string;
-  };
+  feedback?: { summary: string; strengths: string[]; improvements: string[]; scriptAdherence: string };
 }) {
-  const user = await getCurrentUser();
-  const d = db();
-  if (!d.aiRoleplaySessions) d.aiRoleplaySessions = [];
+  const user = await requireCurrentUser();
+  const [session] = await withTenantContext(user.organizationId, (tx) =>
+    tx
+      .insert(schema.aiRoleplaySessions)
+      .values({
+        organizationId: user.organizationId,
+        userId: user.id,
+        scenarioId: params.scenarioId,
+        messages: params.messages,
+        status: "completed",
+        score: params.score,
+        passed: params.passed,
+        feedback: params.feedback,
+        completedAt: new Date(),
+      })
+      .returning()
+  );
 
-  const sessionId = newId("ai-sess");
-  d.aiRoleplaySessions.push({
-    id: sessionId,
-    userId: user.id,
-    scenarioId: params.scenarioId,
-    messages: params.messages,
-    status: "completed",
-    score: params.score,
-    passed: params.passed,
-    feedback: params.feedback,
-    startedAt: new Date().toISOString(),
-    completedAt: new Date().toISOString(),
-  });
-
-  persist();
-  return { sessionId, success: true };
+  return { sessionId: session.id, success: true };
 }
 
+// ---------------- AI Knowledge Chat ----------------
+
+export async function askKnowledgeBaseAction(question: string) {
+  const user = await requireCurrentUser();
+  return answerFromKnowledgeBase(user.organizationId, question);
+}

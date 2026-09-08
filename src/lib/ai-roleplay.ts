@@ -1,4 +1,8 @@
-import type { AiRoleplayScenario, AiRoleplayMessage } from "./types";
+import type { AiRoleplayMessage } from "./types";
+import type { aiRoleplayScenarios } from "./drizzle/schema";
+import { callClaudeForJson } from "./claude";
+
+type AiRoleplayScenario = typeof aiRoleplayScenarios.$inferSelect;
 
 interface RoleplayTurnResult {
   customerReply: string;
@@ -18,7 +22,7 @@ export async function processRoleplayTurn(
   history: AiRoleplayMessage[],
   newUserMessage: string
 ): Promise<RoleplayTurnResult> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
   // `history` already includes the message the agent just sent (the caller appends it before
   // calling this), so it directly is the turn count — don't add 1 or every scenario ends one
   // turn early relative to its configured maxTurns.
@@ -27,9 +31,9 @@ export async function processRoleplayTurn(
 
   if (apiKey) {
     try {
-      return await callGeminiRoleplay(apiKey, scenario, history, newUserMessage, isFinalTurn, turnCount);
+      return await callClaudeRoleplay(scenario, history, newUserMessage, isFinalTurn, turnCount);
     } catch (err) {
-      console.error("Failed to call Gemini API, falling back to contextual engine:", err);
+      console.error("Failed to call Claude API, falling back to contextual engine:", err);
     }
   }
 
@@ -37,8 +41,36 @@ export async function processRoleplayTurn(
   return simulateContextualReply(scenario, history, isFinalTurn);
 }
 
-async function callGeminiRoleplay(
-  apiKey: string,
+const ROLEPLAY_TOOL = {
+  name: "roleplay_turn",
+  description: "The in-character customer reply for this turn, and — only on the final turn — the trainee's performance evaluation.",
+  input_schema: {
+    type: "object",
+    properties: {
+      customerReply: {
+        type: "string",
+        description: "Natural, conversational reply from the customer (1 to 3 sentences, first person, staying in character). If this is the last turn, wrap up how the call ends.",
+      },
+      isFinished: { type: "boolean" },
+      feedback: {
+        type: "object",
+        description: "Only included on the final turn — omit entirely otherwise.",
+        properties: {
+          summary: { type: "string", description: "Executive summary of the agent's performance, 2 sentences." },
+          score: { type: "number", description: "0-100." },
+          passed: { type: "boolean" },
+          strengths: { type: "array", items: { type: "string" } },
+          improvements: { type: "array", items: { type: "string" } },
+          scriptAdherence: { type: "string", description: "Assessment of adherence to the official scripts and the 'I don't know' rule." },
+        },
+        required: ["summary", "score", "passed", "strengths", "improvements", "scriptAdherence"],
+      },
+    },
+    required: ["customerReply", "isFinished"],
+  },
+};
+
+async function callClaudeRoleplay(
   scenario: AiRoleplayScenario,
   history: AiRoleplayMessage[],
   newUserMessage: string,
@@ -49,58 +81,26 @@ async function callGeminiRoleplay(
   // transcript and quote it separately — otherwise it appears twice in the prompt.
   const conversationHistory = history
     .slice(0, -1)
-    .map((m) => `${m.sender === "ai_customer" ? "CUSTOMER" : "DTR_AGENT"}: ${m.text}`)
+    .map((m) => `${m.sender === "ai_customer" ? "CUSTOMER" : "AGENT"}: ${m.text}`)
     .join("\n");
 
-  const prompt = `
-You are voice-acting the following customer in a customer-service training simulation for Dream Team Roofing:
-CHARACTER: ${scenario.customerPersona}
-CUSTOMER INSTRUCTIONS: ${scenario.systemPrompt}
-COMPANY GRADING CRITERIA: ${scenario.rubricPrompt}
-
-CONVERSATION SO FAR:
+  const prompt = `CONVERSATION SO FAR:
 ${conversationHistory}
-DTR_AGENT (trainee's latest reply): ${newUserMessage}
+AGENT (trainee's latest reply): ${newUserMessage}
 
 CURRENT TURN: ${turnCount} of ${scenario.maxTurns}.
-Is this the last turn?: ${isFinalTurn ? "YES" : "NO"}
+Is this the last turn?: ${isFinalTurn ? "YES — include the feedback evaluation" : "NO — omit feedback"}`;
 
-Respond in English, in strictly valid JSON with this structure:
-{
-  "customerReply": "Natural, conversational reply from the customer (1 to 3 sentences, first person, staying in character). If this is the last turn, wrap up how the call ends.",
-  "isFinished": ${isFinalTurn ? "true" : "false"},
-  "feedback": ${
-    isFinalTurn
-      ? `{
-    "summary": "Executive summary of the agent's performance, 2 sentences.",
-    "score": 85,
-    "passed": true,
-    "strengths": ["Strength 1", "Strength 2"],
-    "improvements": ["Area to improve 1", "Area to improve 2"],
-    "scriptAdherence": "Assessment of adherence to the official scripts and the 'I don't know' rule."
-  }`
-      : "null"
-  }
-}
-`;
+  const system = `You are voice-acting a customer in a customer-service training simulation.
+CHARACTER: ${scenario.customerPersona}
+CUSTOMER INSTRUCTIONS: ${scenario.systemPrompt}
+COMPANY GRADING CRITERIA: ${scenario.rubricPrompt}`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: "application/json", temperature: 0.7 },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Gemini API error: ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  const parsed = JSON.parse(textResponse);
+  const parsed = await callClaudeForJson<{
+    customerReply: string;
+    isFinished: boolean;
+    feedback?: RoleplayTurnResult["feedback"] & { score: number };
+  }>({ system, prompt, tool: ROLEPLAY_TOOL, maxTokens: 1024 });
 
   return {
     customerReply: parsed.customerReply,
