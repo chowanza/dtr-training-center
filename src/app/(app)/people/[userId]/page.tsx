@@ -17,22 +17,30 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ u
   const viewer = await requireCurrentUser();
   const orgId = viewer.organizationId;
 
-  const { user, roles, modules, certifications, memberGroups } = await withTenantContext(orgId, async (tx) => {
+  const { user, roles, modules, certifications, assignments, memberGroups } = await withTenantContext(orgId, async (tx) => {
     const [user] = await tx.select().from(schema.profiles).where(and(eq(schema.profiles.organizationId, orgId), eq(schema.profiles.id, userId))).limit(1);
-    if (!user) return { user: undefined, roles: [], modules: [], certifications: [], memberGroups: [] };
+    if (!user) return { user: undefined, roles: [], modules: [], certifications: [], assignments: [], memberGroups: [] };
     const roles = await tx.select().from(schema.roles).where(eq(schema.roles.organizationId, orgId));
     const modules = await tx.select().from(schema.modules).where(eq(schema.modules.organizationId, orgId));
     const certifications = await tx
       .select()
       .from(schema.certifications)
       .where(and(eq(schema.certifications.organizationId, orgId), eq(schema.certifications.userId, userId)));
+    const assignments = await tx.select().from(schema.assignments).where(and(eq(schema.assignments.organizationId, orgId), eq(schema.assignments.userId, userId)));
     const memberRows = await tx.select().from(schema.groupMembers).where(and(eq(schema.groupMembers.organizationId, orgId), eq(schema.groupMembers.userId, userId)));
     const groupIds = memberRows.map((m) => m.groupId);
     const allGroups = groupIds.length ? await tx.select().from(schema.groups).where(eq(schema.groups.organizationId, orgId)) : [];
     const memberGroups = groupIds.map((gid) => allGroups.find((g) => g.id === gid)).filter((g): g is NonNullable<typeof g> => Boolean(g));
-    return { user, roles, modules, certifications, memberGroups };
+    return { user, roles, modules, certifications, assignments, memberGroups };
   });
   if (!user) notFound();
+
+  // No due-date UI yet (assignments.dueAt is always null today) — until then, "overdue" means
+  // assigned two weeks ago or more and still not certified. Simple, no new infra, matches the
+  // spirit of Trainual's "who still needs a nudge" flag closely enough to be useful now.
+  const OVERDUE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
+  const assignedAtByModule = new Map(assignments.map((a) => [a.moduleId, a.assignedAt]));
+  const isStaffViewer = viewer.accessRole === "admin" || viewer.accessRole === "editor";
 
   const { done, total, pct } = await completionForUser(orgId, userId);
   const progressByModule = await learnerModuleProgress(orgId, userId, modules.map((m) => m.id));
@@ -153,10 +161,25 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ u
           const cert = certifications.find((c) => c.moduleId === m.id);
           const status = cert?.status ?? "not_started";
           const stepPct = progressByModule.get(m.id) ?? 0;
+          const assignedAt = assignedAtByModule.get(m.id);
+          const isOverdue = Boolean(assignedAt) && status !== "certified" && Date.now() - assignedAt!.getTime() >= OVERDUE_AFTER_MS;
           return (
             <div key={m.id} className="flex items-center justify-between gap-4 px-5 py-4">
               <div className="min-w-0 flex-1">
-                <span className="text-[14.5px] font-medium">{m.title}</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[14.5px] font-medium">{m.title}</span>
+                  {isOverdue && <span className="pill p-bad text-[10.5px]">⚠ Overdue</span>}
+                  {isOverdue && isStaffViewer && (
+                    <a
+                      href={`mailto:${user.email}?subject=${encodeURIComponent(`Reminder: ${m.title}`)}&body=${encodeURIComponent(
+                        `Hi ${user.name.split(" ")[0]}, following up — you still have "${m.title}" to finish in the Training Center. Let me know if you're stuck on anything.`
+                      )}`}
+                      className="text-[11px] text-navy hover:underline font-medium"
+                    >
+                      Nudge
+                    </a>
+                  )}
+                </div>
                 {status !== "not_started" && (
                   <div className="flex items-center gap-2 mt-1.5 max-w-[180px]">
                     <div className="h-1.5 flex-1 bg-surface-2 rounded-full overflow-hidden">
