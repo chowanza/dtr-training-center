@@ -12,6 +12,7 @@ import {
   checklistItems,
   roleModuleRequirements,
   modules,
+  moduleVersions,
   certifications,
   stepProgress,
   roles,
@@ -213,4 +214,67 @@ export async function usersInRole(orgId: string, roleId: string) {
       .from(profiles)
       .where(and(eq(profiles.organizationId, orgId), eq(profiles.roleId, roleId), eq(profiles.employmentStatus, "active")))
   );
+}
+
+/**
+ * How much of each module's PUBLISHED content this specific learner has completed, by step
+ * count (steps done / total steps in that module's current version) — the same "completion
+ * score" per subject that a person's report view shows, not the author-side moduleCompleteness
+ * (which measures whether the content itself has been fully written).
+ */
+export async function learnerModuleProgress(orgId: string, userId: string, moduleIds: string[]) {
+  return withTenantContext(orgId, async (tx) => {
+    const result = new Map<string, number>();
+    if (moduleIds.length === 0) return result;
+
+    const mvRows = await tx
+      .select({ id: moduleVersions.id, moduleId: moduleVersions.moduleId })
+      .from(moduleVersions)
+      .where(and(eq(moduleVersions.organizationId, orgId), inArray(moduleVersions.moduleId, moduleIds)));
+    const mvIds = mvRows.map((r) => r.id);
+    const mvIdToModuleId = new Map(mvRows.map((r) => [r.id, r.moduleId]));
+    if (mvIds.length === 0) return result;
+
+    const topicRows = await tx
+      .select({ id: topics.id, moduleVersionId: topics.moduleVersionId })
+      .from(topics)
+      .where(and(eq(topics.organizationId, orgId), inArray(topics.moduleVersionId, mvIds)));
+    const topicIds = topicRows.map((t) => t.id);
+    const topicIdToMvId = new Map(topicRows.map((t) => [t.id, t.moduleVersionId]));
+
+    const stepRows = topicIds.length
+      ? await tx.select({ id: steps.id, topicId: steps.topicId }).from(steps).where(and(eq(steps.organizationId, orgId), inArray(steps.topicId, topicIds)))
+      : [];
+
+    const totalByModule = new Map<string, number>();
+    const stepIdToModuleId = new Map<string, string>();
+    for (const s of stepRows) {
+      const mvId = topicIdToMvId.get(s.topicId);
+      const modId = mvId ? mvIdToModuleId.get(mvId) : undefined;
+      if (!modId) continue;
+      totalByModule.set(modId, (totalByModule.get(modId) ?? 0) + 1);
+      stepIdToModuleId.set(s.id, modId);
+    }
+
+    const stepIds = stepRows.map((s) => s.id);
+    const doneRows = stepIds.length
+      ? await tx
+          .select({ stepId: stepProgress.stepId })
+          .from(stepProgress)
+          .where(and(eq(stepProgress.organizationId, orgId), eq(stepProgress.userId, userId), inArray(stepProgress.stepId, stepIds)))
+      : [];
+    const doneByModule = new Map<string, number>();
+    for (const d of doneRows) {
+      const modId = stepIdToModuleId.get(d.stepId);
+      if (!modId) continue;
+      doneByModule.set(modId, (doneByModule.get(modId) ?? 0) + 1);
+    }
+
+    for (const modId of moduleIds) {
+      const total = totalByModule.get(modId) ?? 0;
+      const done = doneByModule.get(modId) ?? 0;
+      result.set(modId, total > 0 ? Math.round((done / total) * 100) : 0);
+    }
+    return result;
+  });
 }

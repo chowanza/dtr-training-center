@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { requireCurrentUser } from "@/lib/session";
 import { withTenantContext } from "@/lib/drizzle/client";
 import * as schema from "@/lib/drizzle/schema";
-import { completionForUser } from "@/lib/derive";
+import { completionForUser, learnerModuleProgress } from "@/lib/derive";
 import { StatusPill } from "@/components/StatusPill";
 import { updateUser, setUserActive, adminSetUserPassword } from "@/lib/actions";
 
@@ -35,6 +35,7 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ u
   if (!user) notFound();
 
   const { done, total, pct } = await completionForUser(orgId, userId);
+  const progressByModule = await learnerModuleProgress(orgId, userId, modules.map((m) => m.id));
 
   return (
     <div className="max-w-2xl">
@@ -151,10 +152,24 @@ export default async function PersonDetailPage({ params }: { params: Promise<{ u
         {modules.map((m) => {
           const cert = certifications.find((c) => c.moduleId === m.id);
           const status = cert?.status ?? "not_started";
+          const stepPct = progressByModule.get(m.id) ?? 0;
           return (
             <div key={m.id} className="flex items-center justify-between gap-4 px-5 py-4">
-              <span className="text-[14.5px] font-medium">{m.title}</span>
-              <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-[14.5px] font-medium">{m.title}</span>
+                {status !== "not_started" && (
+                  <div className="flex items-center gap-2 mt-1.5 max-w-[180px]">
+                    <div className="h-1.5 flex-1 bg-surface-2 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full ${stepPct >= 100 ? "bg-patina" : stepPct >= 40 ? "bg-amber" : "bg-copper"}`}
+                        style={{ width: `${stepPct}%` }}
+                      />
+                    </div>
+                    <span className="text-[10.5px] text-ink-3 font-[var(--font-mono)]">{stepPct}%</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
                 <StatusPill status={status} />
                 {status === "certified" && cert && (
                   <Link href={`/cert/${cert.id}`} className="text-xs text-navy hover:underline font-medium">
