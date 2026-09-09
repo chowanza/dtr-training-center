@@ -15,7 +15,7 @@ import { reindexModule } from "./knowledge-index";
 import { createNotificationTx } from "./notifications";
 import { processRoleplayTurn } from "./ai-roleplay";
 import { answerFromKnowledgeBase } from "./ai-chat";
-import { callModelForJson } from "./ai-client";
+import { callModelForJson, TruncatedResponseError } from "./ai-client";
 import type { AiRoleplayMessage } from "./types";
 
 type Tx = typeof db;
@@ -805,9 +805,38 @@ const createModuleSchema = z.object({
   templateKey: z.string().optional(),
 });
 
+function slugify(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+/** Shared by createModule and generateModuleFromPrompt — the module+moduleVersion "shell" every
+ * new draft starts from, regardless of how its content gets filled in. */
+async function insertDraftModuleShell(
+  tx: Tx,
+  params: { organizationId: string; title: string; phase: number; ownerId: string; estimatedMinutes: number; changelog: string }
+) {
+  const [mod] = await tx
+    .insert(schema.modules)
+    .values({
+      organizationId: params.organizationId,
+      title: params.title,
+      slug: slugify(params.title),
+      phase: params.phase,
+      ownerId: params.ownerId,
+      currentVersion: 0,
+      status: "draft",
+      estimatedMinutes: params.estimatedMinutes,
+    })
+    .returning();
+  const [mv] = await tx
+    .insert(schema.moduleVersions)
+    .values({ organizationId: params.organizationId, moduleId: mod.id, version: 0, changelog: params.changelog, isDraft: true })
+    .returning();
+  return { mod, mv };
+}
+
 export async function createModule(formData: FormData) {
-  const user = await requireCurrentUser();
-  if (!(user.accessRole === "admin" || user.accessRole === "editor")) throw new Error("Not authorized to create content");
+  const user = await requireStaff();
   const { title, phase, templateKey } = createModuleSchema.parse({
     title: formData.get("title"),
     phase: formData.get("phase") || 1,
@@ -815,28 +844,23 @@ export async function createModule(formData: FormData) {
   });
 
   const moduleId = await withTenantContext(user.organizationId, async (tx) => {
-    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-    const [mod] = await tx
-      .insert(schema.modules)
-      .values({ organizationId: user.organizationId, title, slug, phase, ownerId: user.id, currentVersion: 0, status: "draft", estimatedMinutes: 15 })
+    const { mod, mv } = await insertDraftModuleShell(tx, {
+      organizationId: user.organizationId,
+      title,
+      phase,
+      ownerId: user.id,
+      estimatedMinutes: 15,
+      changelog: templateKey ? `Started from the "${templateKey}" template.` : "",
+    });
+
+    // Batched as multi-row inserts (one round trip per table) rather than one insert per
+    // STARTER_OUTLINE item — see generateModuleFromPrompt for why that matters in this environment.
+    const topicRows = await tx
+      .insert(schema.topics)
+      .values(STARTER_OUTLINE.map((title, i) => ({ organizationId: user.organizationId, moduleVersionId: mv.id, title, sortOrder: i + 1 })))
       .returning();
-    const [mv] = await tx
-      .insert(schema.moduleVersions)
-      .values({
-        organizationId: user.organizationId,
-        moduleId: mod.id,
-        version: 0,
-        changelog: templateKey ? `Started from the "${templateKey}" template.` : "",
-        isDraft: true,
-      })
-      .returning();
-    for (let i = 0; i < STARTER_OUTLINE.length; i++) {
-      const [topic] = await tx
-        .insert(schema.topics)
-        .values({ organizationId: user.organizationId, moduleVersionId: mv.id, title: STARTER_OUTLINE[i], sortOrder: i + 1 })
-        .returning();
-      await tx.insert(schema.steps).values({ organizationId: user.organizationId, topicId: topic.id, title: "Overview", body: "", sortOrder: 1 });
-    }
+    await tx.insert(schema.steps).values(topicRows.map((topic) => ({ organizationId: user.organizationId, topicId: topic.id, title: "Overview", body: "", sortOrder: 1 })));
+
     return mod.id;
   });
 
@@ -871,22 +895,60 @@ const aiModuleSchema = z.object({
     .min(1),
 });
 
+// Real JSON-Schema type markers (not string-described placeholder values) — a weaker free model
+// asked to "match this shape" can otherwise echo a placeholder string like the word "boolean"
+// back as a literal value instead of an actual boolean.
 const AI_MODULE_JSON_SHAPE = {
-  title: "string — a short, specific module title",
-  estimatedMinutes: "number — realistic minutes to complete, 5 to 60",
-  topics: [
-    {
-      title: "string — a topic/chapter title",
-      steps: [{ title: "string — a short step title", body: "string — 2-4 concrete, actionable sentences or a short bulleted list. No filler." }],
+  type: "object",
+  properties: {
+    title: { type: "string", description: "A short, specific module title." },
+    estimatedMinutes: { type: "number", description: "Realistic minutes to complete, 5 to 60." },
+    topics: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "A topic/chapter title." },
+          steps: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "A short step title." },
+                body: { type: "string", description: "2-4 concrete, actionable sentences or a short bulleted list. No filler." },
+              },
+              required: ["title", "body"],
+            },
+          },
+        },
+        required: ["title", "steps"],
+      },
     },
-  ],
-  checklist: ["string — one concrete, checkable action item"],
-  quiz: [
-    {
-      prompt: "string — a comprehension question about the content above",
-      options: [{ text: "string", correct: "boolean — exactly one option per question must be true", explanation: "string — why this option is right or wrong" }],
+    checklist: { type: "array", items: { type: "string", description: "One concrete, checkable action item." } },
+    quiz: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          prompt: { type: "string", description: "A comprehension question about the content above." },
+          options: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+                correct: { type: "boolean", description: "True for exactly one option per question — every other option must be false." },
+                explanation: { type: "string", description: "Why this option is right or wrong." },
+              },
+              required: ["text", "correct", "explanation"],
+            },
+          },
+        },
+        required: ["prompt", "options"],
+      },
     },
-  ],
+  },
+  required: ["title", "estimatedMinutes", "topics", "checklist", "quiz"],
 };
 
 const generateModuleSchema = z.object({
@@ -911,49 +973,37 @@ export async function generateModuleFromPrompt(formData: FormData) {
   const system = `You are an instructional designer writing internal training content for Dream Team Roofing, a residential roofing company. Write real, specific, actionable content grounded in how a roofing company actually operates — never generic filler ("communicate effectively", "be professional") without concrete detail on how. Keep it tight: 2 to 3 topics, each with 1 to 2 steps. Include a checklist of 4 to 6 concrete action items, and a quiz of 2 to 3 questions (2 to 3 options each, exactly one correct, with a short explanation per option) that actually tests comprehension of the content — not trivia.`;
 
   // Free-tier models occasionally return truncated JSON or drift from the requested shape — a
-  // couple of retries meaningfully improves reliability without punishing the user for it.
+  // couple of retries meaningfully improves reliability without punishing the user for it. A
+  // response that was actually cut off (finish_reason: "length") gets a bigger token budget on
+  // the next attempt instead of just repeating the identical request and hoping.
   let parsed: z.infer<typeof aiModuleSchema> | undefined;
   let lastError: unknown;
+  let maxTokens = 6000;
   for (let attempt = 0; attempt < 3 && !parsed; attempt++) {
     try {
       const generated = await callModelForJson<unknown>({
         system,
         prompt: `Write a training module about: ${prompt}`,
         schema: AI_MODULE_JSON_SHAPE,
-        maxTokens: 6000,
+        maxTokens,
       });
       parsed = aiModuleSchema.parse(generated);
     } catch (err) {
       lastError = err;
+      if (err instanceof TruncatedResponseError) maxTokens = Math.min(maxTokens + 2000, 8000);
     }
   }
   if (!parsed) throw new Error(`The AI couldn't generate a valid module that time — try again, or rephrase the description. (${lastError instanceof Error ? lastError.message : "unknown error"})`);
 
   const moduleId = await withTenantContext(user.organizationId, async (tx) => {
-    const slug = parsed.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-    const [mod] = await tx
-      .insert(schema.modules)
-      .values({
-        organizationId: user.organizationId,
-        title: parsed.title,
-        slug,
-        phase,
-        ownerId: user.id,
-        currentVersion: 0,
-        status: "draft",
-        estimatedMinutes: parsed.estimatedMinutes,
-      })
-      .returning();
-    const [mv] = await tx
-      .insert(schema.moduleVersions)
-      .values({
-        organizationId: user.organizationId,
-        moduleId: mod.id,
-        version: 0,
-        changelog: `Drafted by AI from: "${prompt}"`,
-        isDraft: true,
-      })
-      .returning();
+    const { mod, mv } = await insertDraftModuleShell(tx, {
+      organizationId: user.organizationId,
+      title: parsed.title,
+      phase,
+      ownerId: user.id,
+      estimatedMinutes: parsed.estimatedMinutes,
+      changelog: `Drafted by AI from: "${prompt}"`,
+    });
 
     // Batched as multi-row inserts (one round trip per table, not per row) — this environment's
     // Supabase pooler round-trip latency made the naive one-row-at-a-time version take minutes
@@ -1190,26 +1240,32 @@ export async function addStepComment(formData: FormData) {
   const { stepId, body } = addCommentSchema.parse({ stepId: formData.get("stepId"), body: formData.get("body") });
 
   const moduleId = await withTenantContext(user.organizationId, async (tx) => {
-    const [step] = await tx.select().from(schema.steps).where(and(eq(schema.steps.organizationId, user.organizationId), eq(schema.steps.id, stepId))).limit(1);
-    if (!step) throw new Error("Step not found");
-    const [topic] = await tx.select().from(schema.topics).where(and(eq(schema.topics.organizationId, user.organizationId), eq(schema.topics.id, step.topicId))).limit(1);
-    const [mv] = await tx.select().from(schema.moduleVersions).where(and(eq(schema.moduleVersions.organizationId, user.organizationId), eq(schema.moduleVersions.id, topic.moduleVersionId))).limit(1);
-    const [mod] = await tx.select().from(schema.modules).where(and(eq(schema.modules.organizationId, user.organizationId), eq(schema.modules.id, mv.moduleId))).limit(1);
+    // One joined query instead of 4 sequential single-row selects walking step -> topic ->
+    // moduleVersion -> module purely to resolve foreign keys.
+    const [row] = await tx
+      .select({ stepTitle: schema.steps.title, moduleId: schema.modules.id, moduleOwnerId: schema.modules.ownerId, moduleTitle: schema.modules.title })
+      .from(schema.steps)
+      .innerJoin(schema.topics, eq(schema.topics.id, schema.steps.topicId))
+      .innerJoin(schema.moduleVersions, eq(schema.moduleVersions.id, schema.topics.moduleVersionId))
+      .innerJoin(schema.modules, eq(schema.modules.id, schema.moduleVersions.moduleId))
+      .where(and(eq(schema.steps.organizationId, user.organizationId), eq(schema.steps.id, stepId)))
+      .limit(1);
+    if (!row) throw new Error("Step not found");
 
-    await tx.insert(schema.contentComments).values({ organizationId: user.organizationId, stepId, moduleId: mod.id, authorId: user.id, body });
+    await tx.insert(schema.contentComments).values({ organizationId: user.organizationId, stepId, moduleId: row.moduleId, authorId: user.id, body });
 
-    if (mod.ownerId !== user.id) {
+    if (row.moduleOwnerId !== user.id) {
       await createNotificationTx(tx, {
         organizationId: user.organizationId,
-        userId: mod.ownerId,
+        userId: row.moduleOwnerId,
         type: "content_feedback",
-        title: `${user.name} flagged something in ${mod.title}`,
-        body: `On "${step.title}": ${body}`,
-        linkHref: `/builder/${mod.id}`,
+        title: `${user.name} flagged something in ${row.moduleTitle}`,
+        body: `On "${row.stepTitle}": ${body}`,
+        linkHref: `/builder/${row.moduleId}`,
       });
     }
 
-    return mod.id;
+    return row.moduleId;
   });
 
   revalidatePath(`/learn/${moduleId}`);

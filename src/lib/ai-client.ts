@@ -37,9 +37,10 @@ async function chatCompletion(params: { system: string; prompt: string; maxToken
   if (!response.ok) throw new Error(`OpenRouter API error: ${response.status} ${response.statusText} — ${await response.text()}`);
 
   const data = await response.json();
-  const text: string | undefined = data.choices?.[0]?.message?.content;
+  const choice = data.choices?.[0];
+  const text: string | undefined = choice?.message?.content;
   if (!text) throw new Error("OpenRouter response had no message content");
-  return text;
+  return { text, truncated: choice?.finish_reason === "length" };
 }
 
 /**
@@ -70,6 +71,11 @@ function extractJsonObject(text: string): string {
   throw new Error(`Unbalanced JSON object in model response: ${text.slice(0, 200)}`);
 }
 
+/** Thrown when the model's response was cut off (finish_reason: "length") before valid JSON could
+ * be recovered from it — distinct from a malformed/schema-drifted-but-complete response, so a
+ * caller retrying can react by raising maxTokens instead of just repeating the identical request. */
+export class TruncatedResponseError extends Error {}
+
 /**
  * Requests a single JSON object matching `schema` (a JSON-schema-shaped object, embedded in the
  * prompt as an instruction — not passed as a native "tool", since free OpenRouter models have
@@ -78,15 +84,21 @@ function extractJsonObject(text: string): string {
 export async function callModelForJson<T>(params: { system: string; prompt: string; schema: Record<string, unknown>; maxTokens?: number }): Promise<T> {
   const prompt = `${params.prompt}\n\nRespond with ONLY a single valid JSON object — no markdown code fences, no commentary before or after — matching exactly this shape:\n${JSON.stringify(params.schema, null, 2)}`;
 
-  const text = await chatCompletion({ system: params.system, prompt, maxTokens: params.maxTokens ?? 1024, jsonMode: true });
+  const { text, truncated } = await chatCompletion({ system: params.system, prompt, maxTokens: params.maxTokens ?? 1024, jsonMode: true });
   try {
     return JSON.parse(text) as T;
   } catch {
-    return JSON.parse(extractJsonObject(text)) as T;
+    try {
+      return JSON.parse(extractJsonObject(text)) as T;
+    } catch (err) {
+      if (truncated) throw new TruncatedResponseError(`Model response was cut off before valid JSON completed: ${text.slice(-200)}`);
+      throw err;
+    }
   }
 }
 
 /** Plain-text completion, for the knowledge chat's grounded answers (no structured output needed). */
 export async function callModelForText(params: { system: string; prompt: string; maxTokens?: number }): Promise<string> {
-  return chatCompletion({ system: params.system, prompt: params.prompt, maxTokens: params.maxTokens ?? 512, jsonMode: false });
+  const { text } = await chatCompletion({ system: params.system, prompt: params.prompt, maxTokens: params.maxTokens ?? 512, jsonMode: false });
+  return text;
 }
