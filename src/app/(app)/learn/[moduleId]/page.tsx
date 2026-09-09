@@ -9,6 +9,7 @@ import { topicsForModuleVersion, completedStepIds, quizzesForModuleVersion, aiSc
 import { StatusPill } from "@/components/StatusPill";
 import { StepEmbedView } from "@/components/StepEmbedView";
 import { startTraining, completeStep, submitQuizAttempt } from "@/lib/actions";
+import { SignaturePad } from "@/components/SignaturePad";
 import { ContentBlockRenderer } from "@/components/blocks/ContentBlockRenderer";
 import { AiRoleplayWidget } from "@/components/roleplay/AiRoleplayWidget";
 import { Sparkles, Edit3 } from "lucide-react";
@@ -186,8 +187,12 @@ export default async function ModuleViewerPage({ params }: { params: Promise<{ m
       {status === "needs_retraining" && (
         <Banner tone="amber">This module was updated since you were certified. Review anything new below, then retake the knowledge check.</Banner>
       )}
-      {status === "tested_passed" && (
-        <Banner tone="indigo">Every knowledge check passed. Your manager still needs to score your practical evaluation and certify you.</Banner>
+      {status === "tested_passed" && !cert?.signatureData && <SignaturePad moduleId={moduleId} />}
+      {status === "tested_passed" && cert?.signatureData && (
+        <Banner tone="indigo">
+          Signed on {cert.signedAt?.toLocaleDateString()}. Every knowledge check passed — your manager still needs to score your
+          practical evaluation and certify you.
+        </Banner>
       )}
 
       {status === "not_started" && (

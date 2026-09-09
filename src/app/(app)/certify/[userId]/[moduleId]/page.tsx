@@ -71,7 +71,8 @@ export default async function EvaluatePage({ params }: { params: Promise<{ userI
   });
 
   const latestEval = evaluations[0];
-  const canCertify = latestEval?.result === "pass" && cert?.status !== "certified";
+  const hasSigned = Boolean(cert?.signatureData);
+  const canCertify = latestEval?.result === "pass" && hasSigned && cert?.status !== "certified";
 
   return (
     <div className="max-w-2xl">
@@ -111,6 +112,19 @@ export default async function EvaluatePage({ params }: { params: Promise<{ userI
           {scenario.prompt}
         </div>
       )}
+
+      <div className="border border-rule rounded bg-surface p-4 mb-6 text-sm">
+        <span className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-wider text-ink-3 block mb-2">Completion signature</span>
+        {hasSigned ? (
+          <div className="flex items-center gap-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={cert!.signatureData!} alt={`${user.name}'s signature`} className="h-12 border border-rule-2 rounded bg-white" />
+            <span className="text-ink-2 text-xs">Signed {cert!.signedAt?.toLocaleDateString()}</span>
+          </div>
+        ) : (
+          <p className="text-ink-3">{user.name} hasn&apos;t signed their completion acknowledgment yet.</p>
+        )}
+      </div>
 
       {scenario && (
         <form action={submitPracticalEvaluation} className="border border-rule rounded-md bg-surface p-5 mb-6 space-y-4">
@@ -181,7 +195,9 @@ export default async function EvaluatePage({ params }: { params: Promise<{ userI
           {cert?.status === "certified" ? "Already Certified" : "Certify " + user.name}
         </button>
         {!canCertify && cert?.status !== "certified" && (
-          <p className="text-[11px] text-ink-3 mt-2">Requires a passing practical evaluation first.</p>
+          <p className="text-[11px] text-ink-3 mt-2">
+            {!hasSigned ? "Requires their completion signature first." : "Requires a passing practical evaluation first."}
+          </p>
         )}
       </form>
     </div>

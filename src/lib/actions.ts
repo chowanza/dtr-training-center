@@ -447,6 +447,22 @@ export async function submitQuizAttempt(formData: FormData) {
   revalidatePath("/certify");
 }
 
+const signSchema = z.object({ moduleId: z.string(), signatureData: z.string().min(50) });
+
+export async function signModuleCompletion(formData: FormData) {
+  const user = await requireCurrentUser();
+  const { moduleId, signatureData } = signSchema.parse({
+    moduleId: formData.get("moduleId"),
+    signatureData: formData.get("signatureData"),
+  });
+  await withTenantContext(user.organizationId, async (tx) => {
+    const cert = await getOrCreateCert(tx, user.organizationId, user.id, moduleId);
+    await tx.update(schema.certifications).set({ signatureData, signedAt: new Date() }).where(eq(schema.certifications.id, cert.id));
+  });
+  revalidatePath(`/learn/${moduleId}`);
+  revalidatePath("/certify");
+}
+
 // ---------------- Evaluation & Certification ----------------
 
 const evalSchema = z.object({
@@ -498,6 +514,7 @@ export async function certifyUser(formData: FormData) {
     const [mod] = await tx.select().from(schema.modules).where(and(eq(schema.modules.organizationId, approver.organizationId), eq(schema.modules.id, moduleId))).limit(1);
     if (!mod) throw new Error("Module not found");
     const cert = await getOrCreateCert(tx, approver.organizationId, userId, moduleId);
+    if (!cert.signatureData) throw new Error("This person hasn't signed their completion acknowledgment yet — they need to sign it from the module page first.");
     const now = new Date();
     const expires = new Date(now);
     expires.setFullYear(expires.getFullYear() + 1);

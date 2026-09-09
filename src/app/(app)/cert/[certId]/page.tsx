@@ -100,6 +100,17 @@ export default async function CertRecordPage({ params }: { params: Promise<{ cer
           <Field label="Certified on" value={cert.certifiedAt ? cert.certifiedAt.toLocaleDateString() : "—"} />
           <Field label="Expires" value={cert.expiresAt ? cert.expiresAt.toLocaleDateString() : "—"} />
         </dl>
+
+        {cert.signatureData && (
+          <div className="mt-6 pt-6 border-t border-rule">
+            <p className="font-[var(--font-mono)] text-[10px] uppercase tracking-wider text-ink-3 mb-2">Completion signature</p>
+            <div className="flex items-center gap-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={cert.signatureData} alt={`${user.name}'s signature`} className="h-12 border border-rule-2 rounded bg-white" />
+              <span className="text-ink-2 text-xs">Signed {cert.signedAt?.toLocaleDateString()}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {quizResults.length > 0 && (

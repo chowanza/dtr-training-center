@@ -313,6 +313,11 @@ export const certifications = pgTable("certifications", {
   certifiedAt: timestamp("certified_at", { withTimezone: true }),
   expiresAt: timestamp("expires_at", { withTimezone: true }),
   notes: text("notes").notNull().default(""),
+  // The learner's own acknowledgment that they completed and understood the training — separate
+  // from certifiedAt/certifiedBy, which is the staff member's sign-off. Stored as a PNG data URI
+  // from the signature pad canvas; small enough (a few KB) not to need object storage yet.
+  signatureData: text("signature_data"),
+  signedAt: timestamp("signed_at", { withTimezone: true }),
 });
 
 // Append-only by convention (enforced in the query layer, not the DB): never UPDATE a row here,
