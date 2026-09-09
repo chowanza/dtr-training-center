@@ -30,6 +30,10 @@ interface ChunkRow {
  * full-text search (org-scoped), then asks Claude to answer strictly from those chunks —
  * grounded, with the same "say you don't know rather than guess" discipline the app trains
  * CSRs on. Full-text rather than semantic/vector search because Claude has no embeddings API.
+ *
+ * Terms are OR'd together (not plainto_tsquery's implicit AND) and ranked by match quality —
+ * a natural question rarely has every one of its words in a single short chunk, so requiring
+ * all of them would return nothing for most real questions.
  */
 export async function answerFromKnowledgeBase(orgId: string, question: string): Promise<KnowledgeAnswer> {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -37,11 +41,16 @@ export async function answerFromKnowledgeBase(orgId: string, question: string): 
   }
 
   const result = await db.execute(sql`
-    SELECT id, source_type, module_id, content
-    FROM knowledge_chunks
+    WITH q AS (
+      SELECT to_tsquery('english', string_agg(lexeme, ' | ')) AS tsq
+      FROM unnest(tsvector_to_array(to_tsvector('english', ${question}))) AS lexeme
+    )
+    SELECT knowledge_chunks.id, source_type, module_id, content
+    FROM knowledge_chunks, q
     WHERE organization_id = ${orgId}
-      AND to_tsvector('english', content) @@ plainto_tsquery('english', ${question})
-    ORDER BY ts_rank(to_tsvector('english', content), plainto_tsquery('english', ${question})) DESC
+      AND q.tsq IS NOT NULL
+      AND to_tsvector('english', content) @@ q.tsq
+    ORDER BY ts_rank(to_tsvector('english', content), q.tsq) DESC
     LIMIT ${TOP_K}
   `);
   const rows = Array.from(result) as unknown as ChunkRow[];
