@@ -22,6 +22,7 @@ import {
   deleteQuizQuestion,
   updateScenario,
   publishModule,
+  resolveStepComment,
 } from "@/lib/actions";
 import { BlockEditor } from "@/components/builder/BlockEditor";
 import { AiScenarioEditor } from "@/components/builder/AiScenarioEditor";
@@ -37,7 +38,7 @@ export default async function ModuleEditorPage({ params }: { params: Promise<{ m
   // concurrently via Promise.all — each `await tx...` is otherwise a full network round trip to
   // the remote Supabase pooler, and this page needs a dozen-plus of them; sequentially awaiting
   // each one (as earlier versions of this page did) made it take 8-14s to load.
-  const { mod, mv, topics, steps, embeds, blocks, quizzes, questions, options, scripts, checklist, scenario, aiScenarios } =
+  const { mod, mv, topics, steps, embeds, blocks, quizzes, questions, options, scripts, checklist, scenario, aiScenarios, comments, commenters } =
     await withTenantContext(orgId, async (tx) => {
       const [mod] = await tx.select().from(schema.modules).where(and(eq(schema.modules.organizationId, orgId), eq(schema.modules.id, moduleId))).limit(1);
       if (!mod) notFound();
@@ -78,8 +79,16 @@ export default async function ModuleEditorPage({ params }: { params: Promise<{ m
       const options = questionIds.length
         ? await tx.select().from(schema.quizOptions).where(and(eq(schema.quizOptions.organizationId, orgId), inArray(schema.quizOptions.questionId, questionIds)))
         : [];
+      const [comments, commenters] = await Promise.all([
+        tx
+          .select()
+          .from(schema.contentComments)
+          .where(and(eq(schema.contentComments.organizationId, orgId), eq(schema.contentComments.moduleId, moduleId)))
+          .orderBy(schema.contentComments.createdAt),
+        tx.select({ id: schema.profiles.id, name: schema.profiles.name }).from(schema.profiles).where(eq(schema.profiles.organizationId, orgId)),
+      ]);
 
-      return { mod, mv, topics, steps, embeds, blocks, quizzes, questions, options, scripts, checklist, scenario: scenarioRows[0], aiScenarios };
+      return { mod, mv, topics, steps, embeds, blocks, quizzes, questions, options, scripts, checklist, scenario: scenarioRows[0], aiScenarios, comments, commenters };
     });
 
   // Computed from data already fetched above, rather than re-querying everything again via
@@ -110,6 +119,7 @@ export default async function ModuleEditorPage({ params }: { params: Promise<{ m
   }));
 
   const aiScenariosForUi = aiScenarios.map((s) => ({ ...s, topicId: s.topicId ?? undefined }));
+  const commenterNameById = new Map(commenters.map((c) => [c.id, c.name]));
 
   return (
     <div>
@@ -248,6 +258,40 @@ export default async function ModuleEditorPage({ params }: { params: Promise<{ m
 
                         {/* Rich Multimedia Blocks Editor */}
                         <BlockEditor stepId={step.id} moduleId={moduleId} blocks={stepBlocks} />
+
+                        {(() => {
+                          const stepComments = comments.filter((c) => c.stepId === step.id);
+                          const openComments = stepComments.filter((c) => !c.resolved);
+                          if (stepComments.length === 0) return null;
+                          return (
+                            <div className="mt-3 pt-3 border-t border-rule/60">
+                              <details open={openComments.length > 0}>
+                                <summary className="text-[11px] font-[var(--font-mono)] uppercase tracking-wider text-ink-3 cursor-pointer">
+                                  Feedback ({openComments.length} open{stepComments.length > openComments.length ? `, ${stepComments.length - openComments.length} resolved` : ""})
+                                </summary>
+                                <div className="space-y-2 mt-2">
+                                  {stepComments.map((c) => (
+                                    <div key={c.id} className={`border rounded p-2.5 text-xs ${c.resolved ? "border-rule bg-surface-2 opacity-60" : "border-amber bg-amber-soft"}`}>
+                                      <div className="flex items-start justify-between gap-2">
+                                        <p className={c.resolved ? "line-through" : ""}>{c.body}</p>
+                                        {!c.resolved && (
+                                          <form action={resolveStepComment} className="shrink-0">
+                                            <input type="hidden" name="id" value={c.id} />
+                                            <input type="hidden" name="moduleId" value={moduleId} />
+                                            <button className="text-navy hover:underline font-medium whitespace-nowrap">Resolve</button>
+                                          </form>
+                                        )}
+                                      </div>
+                                      <p className="text-ink-3 mt-1">
+                                        {c.authorId ? (commenterNameById.get(c.authorId) ?? "Someone") : "Someone"} · {c.createdAt.toLocaleDateString()}
+                                      </p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </details>
+                            </div>
+                          );
+                        })()}
 
                         <form action={deleteStep} className="mt-3 pt-2 border-t border-rule/60 flex justify-end">
                           <input type="hidden" name="id" value={step.id} />

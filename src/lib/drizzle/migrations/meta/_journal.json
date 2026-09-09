@@ -50,6 +50,13 @@
       "when": 1788920334312,
       "tag": "0006_cert_signature",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788922567361,
+      "tag": "0007_content_comments",
+      "breakpoints": true
     }
   ]
 }

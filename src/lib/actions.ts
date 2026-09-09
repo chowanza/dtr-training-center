@@ -1019,3 +1019,51 @@ export async function markAllNotificationsRead() {
   );
   revalidatePath("/", "layout");
 }
+
+// ---------------- Content Feedback ----------------
+
+const addCommentSchema = z.object({ stepId: z.string(), body: z.string().min(1) });
+
+export async function addStepComment(formData: FormData) {
+  const user = await requireCurrentUser();
+  const { stepId, body } = addCommentSchema.parse({ stepId: formData.get("stepId"), body: formData.get("body") });
+
+  const moduleId = await withTenantContext(user.organizationId, async (tx) => {
+    const [step] = await tx.select().from(schema.steps).where(and(eq(schema.steps.organizationId, user.organizationId), eq(schema.steps.id, stepId))).limit(1);
+    if (!step) throw new Error("Step not found");
+    const [topic] = await tx.select().from(schema.topics).where(and(eq(schema.topics.organizationId, user.organizationId), eq(schema.topics.id, step.topicId))).limit(1);
+    const [mv] = await tx.select().from(schema.moduleVersions).where(and(eq(schema.moduleVersions.organizationId, user.organizationId), eq(schema.moduleVersions.id, topic.moduleVersionId))).limit(1);
+    const [mod] = await tx.select().from(schema.modules).where(and(eq(schema.modules.organizationId, user.organizationId), eq(schema.modules.id, mv.moduleId))).limit(1);
+
+    await tx.insert(schema.contentComments).values({ organizationId: user.organizationId, stepId, moduleId: mod.id, authorId: user.id, body });
+
+    if (mod.ownerId !== user.id) {
+      await createNotificationTx(tx, {
+        organizationId: user.organizationId,
+        userId: mod.ownerId,
+        type: "content_feedback",
+        title: `${user.name} flagged something in ${mod.title}`,
+        body: `On "${step.title}": ${body}`,
+        linkHref: `/builder/${mod.id}`,
+      });
+    }
+
+    return mod.id;
+  });
+
+  revalidatePath(`/learn/${moduleId}`);
+  revalidatePath(`/builder/${moduleId}`);
+}
+
+export async function resolveStepComment(formData: FormData) {
+  const user = await requireStaff();
+  const id = z.string().parse(formData.get("id"));
+  const moduleId = z.string().parse(formData.get("moduleId"));
+  await withTenantContext(user.organizationId, (tx) =>
+    tx
+      .update(schema.contentComments)
+      .set({ resolved: true, resolvedBy: user.id, resolvedAt: new Date() })
+      .where(and(eq(schema.contentComments.organizationId, user.organizationId), eq(schema.contentComments.id, id)))
+  );
+  revalidatePath(`/builder/${moduleId}`);
+}

@@ -8,7 +8,7 @@ import { SCRIPT_TYPES } from "@/lib/constants";
 import { topicsForModuleVersion, completedStepIds, quizzesForModuleVersion, aiScenariosForModuleVersion } from "@/lib/derive";
 import { StatusPill } from "@/components/StatusPill";
 import { StepEmbedView } from "@/components/StepEmbedView";
-import { startTraining, completeStep, submitQuizAttempt } from "@/lib/actions";
+import { startTraining, completeStep, submitQuizAttempt, addStepComment } from "@/lib/actions";
 import { SignaturePad } from "@/components/SignaturePad";
 import { ContentBlockRenderer } from "@/components/blocks/ContentBlockRenderer";
 import { AiRoleplayWidget } from "@/components/roleplay/AiRoleplayWidget";
@@ -351,6 +351,23 @@ function StepView({
           ))}
         </div>
       )}
+      <details className="mt-2 mb-1">
+        <summary className="text-[11px] text-ink-3 hover:text-navy cursor-pointer inline-block">Something wrong with this step?</summary>
+        <form action={addStepComment} className="mt-2 flex flex-col gap-2 max-w-md">
+          <input type="hidden" name="stepId" value={step.id} />
+          <textarea
+            name="body"
+            required
+            rows={2}
+            placeholder="Confusing, outdated, missing something — let the author know…"
+            className="w-full border border-rule-2 rounded bg-surface px-2.5 py-1.5 text-xs"
+          />
+          <button type="submit" className="btn-secondary text-xs self-start">
+            Send Feedback
+          </button>
+        </form>
+      </details>
+
       {isCurrent && (
         <form action={completeStep} className="mt-3">
           <input type="hidden" name="stepId" value={step.id} />

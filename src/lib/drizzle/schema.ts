@@ -394,6 +394,23 @@ export const knowledgeChunks = pgTable("knowledge_chunks", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ---------------- Content feedback ----------------
+
+export const contentComments = pgTable("content_comments", {
+  id: id(),
+  organizationId: orgId(),
+  stepId: uuid("step_id").notNull().references(() => steps.id, { onDelete: "cascade" }),
+  // Denormalized so builder/notification queries don't need to join up through
+  // step -> topic -> module_version -> module every time.
+  moduleId: uuid("module_id").notNull().references(() => modules.id, { onDelete: "cascade" }),
+  authorId: uuid("author_id").references(() => profiles.id, { onDelete: "set null" }),
+  body: text("body").notNull(),
+  resolved: boolean("resolved").notNull().default(false),
+  resolvedBy: uuid("resolved_by").references(() => profiles.id, { onDelete: "set null" }),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  createdAt: createdAt(),
+});
+
 // ---------------- Notifications ----------------
 
 export const notifications = pgTable("notifications", {
