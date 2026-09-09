@@ -114,7 +114,20 @@ export async function deleteTopic(formData: FormData) {
   const user = await requireStaff();
   const id = z.string().parse(formData.get("id"));
   const moduleId = z.string().parse(formData.get("moduleId"));
-  await withTenantContext(user.organizationId, (tx) => tx.delete(schema.topics).where(and(eq(schema.topics.organizationId, user.organizationId), eq(schema.topics.id, id))));
+  await withTenantContext(user.organizationId, async (tx) => {
+    // quizzes.topicId cascades on delete — without this guard, deleting a topic silently takes
+    // its knowledge check (and every question/option on it) with it, with no warning anywhere.
+    const [quiz] = await tx.select({ id: schema.quizzes.id }).from(schema.quizzes).where(and(eq(schema.quizzes.organizationId, user.organizationId), eq(schema.quizzes.topicId, id))).limit(1);
+    if (quiz) {
+      const [question] = await tx
+        .select({ id: schema.quizQuestions.id })
+        .from(schema.quizQuestions)
+        .where(and(eq(schema.quizQuestions.organizationId, user.organizationId), eq(schema.quizQuestions.quizId, quiz.id)))
+        .limit(1);
+      if (question) throw new Error("This topic has a knowledge check on it — remove its questions first, or deleting the topic will take the quiz with it.");
+    }
+    await tx.delete(schema.topics).where(and(eq(schema.topics.organizationId, user.organizationId), eq(schema.topics.id, id)));
+  });
   revalidatePath(`/builder/${moduleId}`);
 }
 
@@ -847,7 +860,12 @@ const aiModuleSchema = z.object({
     .array(
       z.object({
         prompt: z.string().min(1),
-        options: z.array(z.object({ text: z.string().min(1), correct: z.boolean(), explanation: z.string().default("") })).min(2),
+        options: z
+          .array(z.object({ text: z.string().min(1), correct: z.boolean(), explanation: z.string().default("") }))
+          .min(2)
+          .refine((options) => options.filter((o) => o.correct).length === 1, {
+            message: "Each quiz question must have exactly one correct option",
+          }),
       })
     )
     .min(1),
@@ -883,8 +901,8 @@ const generateModuleSchema = z.object({
  * something the team is actually certified against, same as a hand-written draft.
  */
 export async function generateModuleFromPrompt(formData: FormData) {
-  const user = await requireCurrentUser();
-  if (!(user.accessRole === "admin" || user.accessRole === "editor")) throw new Error("Not authorized to create content");
+  const user = await requireStaff();
+  if (!process.env.OPENROUTER_API_KEY) throw new Error("The AI module generator isn't set up yet — ask an admin to add an OpenRouter API key.");
   const { prompt, phase } = generateModuleSchema.parse({
     prompt: formData.get("prompt"),
     phase: formData.get("phase") || 1,

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { AiRoleplayMessage } from "./types";
 import type { aiRoleplayScenarios } from "./drizzle/schema";
 import { callModelForJson } from "./ai-client";
@@ -67,6 +68,25 @@ const ROLEPLAY_SCHEMA = {
   required: ["customerReply", "isFinished"],
 };
 
+// Runtime-validated counterpart to ROLEPLAY_SCHEMA — OpenRouter's prompt-only JSON contract gives
+// no structural guarantee the way Anthropic's tool-use did, so a response missing a required field
+// must throw here (not surface as `undefined` to the trainee) so the caller's try/catch falls back
+// to simulateContextualReply instead of silently recording a bogus pass/fail.
+const roleplayResultSchema = z.object({
+  customerReply: z.string().min(1),
+  isFinished: z.boolean(),
+  feedback: z
+    .object({
+      summary: z.string(),
+      score: z.number(),
+      passed: z.boolean(),
+      strengths: z.array(z.string()),
+      improvements: z.array(z.string()),
+      scriptAdherence: z.string(),
+    })
+    .optional(),
+});
+
 async function callModelRoleplay(
   scenario: AiRoleplayScenario,
   history: AiRoleplayMessage[],
@@ -93,11 +113,8 @@ CHARACTER: ${scenario.customerPersona}
 CUSTOMER INSTRUCTIONS: ${scenario.systemPrompt}
 COMPANY GRADING CRITERIA: ${scenario.rubricPrompt}`;
 
-  const parsed = await callModelForJson<{
-    customerReply: string;
-    isFinished: boolean;
-    feedback?: RoleplayTurnResult["feedback"] & { score: number };
-  }>({ system, prompt, schema: ROLEPLAY_SCHEMA, maxTokens: 1024 });
+  const generated = await callModelForJson<unknown>({ system, prompt, schema: ROLEPLAY_SCHEMA, maxTokens: 1024 });
+  const parsed = roleplayResultSchema.parse(generated);
 
   return {
     customerReply: parsed.customerReply,
