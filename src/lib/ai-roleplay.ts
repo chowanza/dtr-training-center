@@ -1,6 +1,6 @@
 import type { AiRoleplayMessage } from "./types";
 import type { aiRoleplayScenarios } from "./drizzle/schema";
-import { callClaudeForJson } from "./claude";
+import { callModelForJson } from "./ai-client";
 
 type AiRoleplayScenario = typeof aiRoleplayScenarios.$inferSelect;
 
@@ -22,7 +22,7 @@ export async function processRoleplayTurn(
   history: AiRoleplayMessage[],
   newUserMessage: string
 ): Promise<RoleplayTurnResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.OPENROUTER_API_KEY;
   // `history` already includes the message the agent just sent (the caller appends it before
   // calling this), so it directly is the turn count — don't add 1 or every scenario ends one
   // turn early relative to its configured maxTurns.
@@ -31,9 +31,9 @@ export async function processRoleplayTurn(
 
   if (apiKey) {
     try {
-      return await callClaudeRoleplay(scenario, history, newUserMessage, isFinalTurn, turnCount);
+      return await callModelRoleplay(scenario, history, newUserMessage, isFinalTurn, turnCount);
     } catch (err) {
-      console.error("Failed to call Claude API, falling back to contextual engine:", err);
+      console.error("Failed to call the AI model, falling back to contextual engine:", err);
     }
   }
 
@@ -41,12 +41,10 @@ export async function processRoleplayTurn(
   return simulateContextualReply(scenario, history, isFinalTurn);
 }
 
-const ROLEPLAY_TOOL = {
-  name: "roleplay_turn",
+const ROLEPLAY_SCHEMA = {
+  type: "object",
   description: "The in-character customer reply for this turn, and — only on the final turn — the trainee's performance evaluation.",
-  input_schema: {
-    type: "object",
-    properties: {
+  properties: {
       customerReply: {
         type: "string",
         description: "Natural, conversational reply from the customer (1 to 3 sentences, first person, staying in character). If this is the last turn, wrap up how the call ends.",
@@ -65,12 +63,11 @@ const ROLEPLAY_TOOL = {
         },
         required: ["summary", "score", "passed", "strengths", "improvements", "scriptAdherence"],
       },
-    },
-    required: ["customerReply", "isFinished"],
   },
+  required: ["customerReply", "isFinished"],
 };
 
-async function callClaudeRoleplay(
+async function callModelRoleplay(
   scenario: AiRoleplayScenario,
   history: AiRoleplayMessage[],
   newUserMessage: string,
@@ -96,11 +93,11 @@ CHARACTER: ${scenario.customerPersona}
 CUSTOMER INSTRUCTIONS: ${scenario.systemPrompt}
 COMPANY GRADING CRITERIA: ${scenario.rubricPrompt}`;
 
-  const parsed = await callClaudeForJson<{
+  const parsed = await callModelForJson<{
     customerReply: string;
     isFinished: boolean;
     feedback?: RoleplayTurnResult["feedback"] & { score: number };
-  }>({ system, prompt, tool: ROLEPLAY_TOOL, maxTokens: 1024 });
+  }>({ system, prompt, schema: ROLEPLAY_SCHEMA, maxTokens: 1024 });
 
   return {
     customerReply: parsed.customerReply,

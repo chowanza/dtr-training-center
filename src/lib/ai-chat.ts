@@ -2,7 +2,7 @@ import "server-only";
 import { sql, and, eq, inArray } from "drizzle-orm";
 import { db } from "./drizzle/client";
 import { modules } from "./drizzle/schema";
-import { callClaudeForText } from "./claude";
+import { callModelForText } from "./ai-client";
 
 export interface KnowledgeCitation {
   moduleId: string;
@@ -27,17 +27,17 @@ interface ChunkRow {
 /**
  * RAG over this org's PUBLISHED training content only (indexed by reindexModule at publish
  * time — see src/lib/knowledge-index.ts). Matches the question against chunks with Postgres
- * full-text search (org-scoped), then asks Claude to answer strictly from those chunks —
+ * full-text search (org-scoped), then asks the model to answer strictly from those chunks —
  * grounded, with the same "say you don't know rather than guess" discipline the app trains
- * CSRs on. Full-text rather than semantic/vector search because Claude has no embeddings API.
+ * CSRs on. Full-text rather than semantic/vector search since the model has no embeddings API.
  *
  * Terms are OR'd together (not plainto_tsquery's implicit AND) and ranked by match quality —
  * a natural question rarely has every one of its words in a single short chunk, so requiring
  * all of them would return nothing for most real questions.
  */
 export async function answerFromKnowledgeBase(orgId: string, question: string): Promise<KnowledgeAnswer> {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return { answer: "The AI knowledge chat isn't set up yet — ask an admin to add an Anthropic API key.", citations: [] };
+  if (!process.env.OPENROUTER_API_KEY) {
+    return { answer: "The AI knowledge chat isn't set up yet — ask an admin to add an OpenRouter API key.", citations: [] };
   }
 
   const result = await db.execute(sql`
@@ -72,7 +72,7 @@ export async function answerFromKnowledgeBase(orgId: string, question: string): 
 
   const prompt = `CONTEXT:\n${context}\n\nQUESTION: ${question}`;
 
-  const answer = await callClaudeForText({ system, prompt, maxTokens: 512 });
+  const answer = await callModelForText({ system, prompt, maxTokens: 512 });
 
   const seen = new Set<string>();
   const citations: KnowledgeCitation[] = [];

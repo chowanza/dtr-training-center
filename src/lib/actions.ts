@@ -336,7 +336,7 @@ export async function publishModule(formData: FormData) {
   });
 
   // Best-effort: the AI knowledge chat should reflect the newly published content, but a
-  // reindex failure (e.g. no ANTHROPIC_API_KEY configured yet) shouldn't block publishing itself.
+  // reindex failure (e.g. no OPENROUTER_API_KEY configured yet) shouldn't block publishing itself.
   try {
     await reindexModule(user.organizationId, moduleId);
   } catch (err) {
