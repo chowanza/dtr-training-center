@@ -151,4 +151,45 @@ body {
   transition: background-color .15s, color .15s;
 }
 .sidebar-link:hover { background: var(--surface-2); color: var(--ink); }
+
+/* Pure-CSS org chart tree: connecting lines drawn with border pseudo-elements, not JS/SVG
+   measurement, so it works server-rendered. `li li` (not plain `li`) scopes the sibling bar +
+   drop-line rules to every level EXCEPT the roots (`.org-tree > li`), since roots are independent
+   trees with no shared parent box to connect from. */
+.org-tree, .org-tree ul {
+  display: flex;
+  justify-content: center;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.org-tree { gap: 40px; }
+.org-tree li { display: flex; flex-direction: column; align-items: center; position: relative; }
+.org-tree li li { padding: 20px 10px 0 10px; }
+.org-tree li li::before,
+.org-tree li li::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 50%;
+  width: 50%;
+  height: 20px;
+  border-top: 1px solid var(--rule-2);
+}
+.org-tree li li::after { right: auto; left: 50%; border-left: 1px solid var(--rule-2); }
+.org-tree li li:only-child { padding-top: 0; }
+.org-tree li li:only-child::before, .org-tree li li:only-child::after { display: none; }
+.org-tree li li:first-child::before, .org-tree li li:last-child::after { border-top: none; }
+.org-tree li li:last-child::before { border-right: 1px solid var(--rule-2); border-radius: 0 6px 0 0; }
+.org-tree li li:first-child::after { border-radius: 6px 0 0 0; }
+.org-tree li > ul { position: relative; padding-top: 20px; }
+.org-tree li > ul::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 0;
+  height: 20px;
+  border-left: 1px solid var(--rule-2);
+}
 .sidebar-link.active { background: var(--navy-soft); color: var(--navy); font-weight: 600; }

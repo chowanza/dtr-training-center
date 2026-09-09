@@ -17,7 +17,7 @@ async function RoleNode({ orgId, role, selectedId }: { orgId: string; role: Role
   const active = role.id === selectedId;
 
   return (
-    <div className="flex flex-col items-center">
+    <li>
       <Link
         href={`/people/roles?role=${role.id}`}
         className={`border rounded-lg px-4 py-3 min-w-[160px] text-center bg-surface transition-colors ${
@@ -39,15 +39,13 @@ async function RoleNode({ orgId, role, selectedId }: { orgId: string; role: Role
         </div>
       </Link>
       {children.length > 0 && (
-        <div className="flex gap-8 pt-6">
+        <ul>
           {children.map((c) => (
-            <div key={c.id} className="flex flex-col items-center">
-              <RoleNode orgId={orgId} role={c} selectedId={selectedId} />
-            </div>
+            <RoleNode key={c.id} orgId={orgId} role={c} selectedId={selectedId} />
           ))}
-        </div>
+        </ul>
       )}
-    </div>
+    </li>
   );
 }
 
@@ -98,11 +96,11 @@ export default async function RoleChartPage({ searchParams }: { searchParams: Pr
 
       <div className="grid lg:grid-cols-[1fr_320px] gap-6">
         <div className="border border-rule rounded-xl bg-surface p-8 overflow-x-auto">
-          <div className="flex gap-16 justify-center min-w-max">
+          <ul className="org-tree min-w-max">
             {roots.map((r) => (
               <RoleNode key={r.id} orgId={orgId} role={r} selectedId={selectedId} />
             ))}
-          </div>
+          </ul>
         </div>
 
         <div className="border border-rule rounded-xl bg-surface p-5 h-fit">
