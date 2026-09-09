@@ -15,6 +15,7 @@ import { reindexModule } from "./knowledge-index";
 import { createNotificationTx } from "./notifications";
 import { processRoleplayTurn } from "./ai-roleplay";
 import { answerFromKnowledgeBase } from "./ai-chat";
+import { callModelForJson } from "./ai-client";
 import type { AiRoleplayMessage } from "./types";
 
 type Tx = typeof db;
@@ -823,6 +824,148 @@ export async function createModule(formData: FormData) {
         .returning();
       await tx.insert(schema.steps).values({ organizationId: user.organizationId, topicId: topic.id, title: "Overview", body: "", sortOrder: 1 });
     }
+    return mod.id;
+  });
+
+  revalidatePath("/builder");
+  redirect(`/builder/${moduleId}`);
+}
+
+const aiModuleSchema = z.object({
+  title: z.string().min(1),
+  estimatedMinutes: z.number().int().min(5).max(120).default(20),
+  topics: z
+    .array(
+      z.object({
+        title: z.string().min(1),
+        steps: z.array(z.object({ title: z.string().min(1), body: z.string().min(1) })).min(1),
+      })
+    )
+    .min(1),
+  checklist: z.array(z.string().min(1)).min(1),
+  quiz: z
+    .array(
+      z.object({
+        prompt: z.string().min(1),
+        options: z.array(z.object({ text: z.string().min(1), correct: z.boolean(), explanation: z.string().default("") })).min(2),
+      })
+    )
+    .min(1),
+});
+
+const AI_MODULE_JSON_SHAPE = {
+  title: "string — a short, specific module title",
+  estimatedMinutes: "number — realistic minutes to complete, 5 to 60",
+  topics: [
+    {
+      title: "string — a topic/chapter title",
+      steps: [{ title: "string — a short step title", body: "string — 2-4 concrete, actionable sentences or a short bulleted list. No filler." }],
+    },
+  ],
+  checklist: ["string — one concrete, checkable action item"],
+  quiz: [
+    {
+      prompt: "string — a comprehension question about the content above",
+      options: [{ text: "string", correct: "boolean — exactly one option per question must be true", explanation: "string — why this option is right or wrong" }],
+    },
+  ],
+};
+
+const generateModuleSchema = z.object({
+  prompt: z.string().min(10),
+  phase: z.coerce.number().default(1),
+});
+
+/**
+ * Drafts a full module — topics, steps, a checklist, and a quiz — from a plain-language
+ * description, via the same free OpenRouter model used by the roleplay/knowledge-chat features.
+ * Always lands as an unpublished draft: AI output still needs a human review pass before it's
+ * something the team is actually certified against, same as a hand-written draft.
+ */
+export async function generateModuleFromPrompt(formData: FormData) {
+  const user = await requireCurrentUser();
+  if (!(user.accessRole === "admin" || user.accessRole === "editor")) throw new Error("Not authorized to create content");
+  const { prompt, phase } = generateModuleSchema.parse({
+    prompt: formData.get("prompt"),
+    phase: formData.get("phase") || 1,
+  });
+
+  const system = `You are an instructional designer writing internal training content for Dream Team Roofing, a residential roofing company. Write real, specific, actionable content grounded in how a roofing company actually operates — never generic filler ("communicate effectively", "be professional") without concrete detail on how. Keep it tight: 2 to 3 topics, each with 1 to 2 steps. Include a checklist of 4 to 6 concrete action items, and a quiz of 2 to 3 questions (2 to 3 options each, exactly one correct, with a short explanation per option) that actually tests comprehension of the content — not trivia.`;
+
+  // Free-tier models occasionally return truncated JSON or drift from the requested shape — a
+  // couple of retries meaningfully improves reliability without punishing the user for it.
+  let parsed: z.infer<typeof aiModuleSchema> | undefined;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3 && !parsed; attempt++) {
+    try {
+      const generated = await callModelForJson<unknown>({
+        system,
+        prompt: `Write a training module about: ${prompt}`,
+        schema: AI_MODULE_JSON_SHAPE,
+        maxTokens: 6000,
+      });
+      parsed = aiModuleSchema.parse(generated);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (!parsed) throw new Error(`The AI couldn't generate a valid module that time — try again, or rephrase the description. (${lastError instanceof Error ? lastError.message : "unknown error"})`);
+
+  const moduleId = await withTenantContext(user.organizationId, async (tx) => {
+    const slug = parsed.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    const [mod] = await tx
+      .insert(schema.modules)
+      .values({
+        organizationId: user.organizationId,
+        title: parsed.title,
+        slug,
+        phase,
+        ownerId: user.id,
+        currentVersion: 0,
+        status: "draft",
+        estimatedMinutes: parsed.estimatedMinutes,
+      })
+      .returning();
+    const [mv] = await tx
+      .insert(schema.moduleVersions)
+      .values({
+        organizationId: user.organizationId,
+        moduleId: mod.id,
+        version: 0,
+        changelog: `Drafted by AI from: "${prompt}"`,
+        isDraft: true,
+      })
+      .returning();
+
+    // Batched as multi-row inserts (one round trip per table, not per row) — this environment's
+    // Supabase pooler round-trip latency made the naive one-row-at-a-time version take minutes
+    // for a full module. A single INSERT ... VALUES (...), (...) RETURNING id reliably preserves
+    // row order in Postgres, which is what lets each batch line back up with its parent below.
+    const topicRows = await tx
+      .insert(schema.topics)
+      .values(parsed.topics.map((t, i) => ({ organizationId: user.organizationId, moduleVersionId: mv.id, title: t.title, sortOrder: i + 1 })))
+      .returning();
+
+    const stepValues = parsed.topics.flatMap((t, ti) =>
+      t.steps.map((s, si) => ({ organizationId: user.organizationId, topicId: topicRows[ti].id, title: s.title, body: s.body, sortOrder: si + 1 }))
+    );
+    if (stepValues.length > 0) await tx.insert(schema.steps).values(stepValues);
+
+    await tx
+      .insert(schema.checklistItems)
+      .values(parsed.checklist.map((text, i) => ({ organizationId: user.organizationId, moduleVersionId: mv.id, text, sortOrder: i + 1, isRequired: true })));
+
+    const [quiz] = await tx.insert(schema.quizzes).values({ organizationId: user.organizationId, topicId: topicRows[0].id, passingScore: 80 }).returning();
+    const questionRows = await tx
+      .insert(schema.quizQuestions)
+      .values(parsed.quiz.map((q, i) => ({ organizationId: user.organizationId, quizId: quiz.id, prompt: q.prompt, sortOrder: i + 1 })))
+      .returning();
+
+    const optionValues = parsed.quiz.flatMap((q, qi) =>
+      q.options.map((opt) => ({ organizationId: user.organizationId, questionId: questionRows[qi].id, text: opt.text, isCorrect: opt.correct, explanation: opt.explanation }))
+    );
+    if (optionValues.length > 0) await tx.insert(schema.quizOptions).values(optionValues);
+
     return mod.id;
   });
 

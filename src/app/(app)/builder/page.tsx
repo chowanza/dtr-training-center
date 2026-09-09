@@ -47,6 +47,9 @@ export default async function BuilderIndexPage({ searchParams }: { searchParams:
             <Link href="/builder/templates" className="btn-secondary">
               View Templates
             </Link>
+            <Link href="/builder/generate" className="btn-secondary">
+              ✨ Generate with AI
+            </Link>
             <Link href="/builder/new" className="btn-primary">
               + New Module
             </Link>
